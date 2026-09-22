@@ -24,7 +24,12 @@ Skill này cung cấp cơ chế **Multi-Agent Orchestration** điều phối cô
 
 Để bất kỳ Agent nào (Claude Code, Antigravity, Codex) cũng có thể tự động nhận diện và sử dụng skill này:
 
-Chạy script cài đặt có sẵn trong thư mục skill:
+### Cách 1: Qua `skills` CLI (Khuyến nghị)
+```bash
+npx skills add phapit/agent-skills --skill ai-task-router -g
+```
+
+### Cách 2: Chạy script installer cục bộ
 ```bash
 bash ./install.sh
 ```

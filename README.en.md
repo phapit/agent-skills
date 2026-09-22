@@ -30,7 +30,19 @@ packaged as the **Universal Skill** `ai-task-router`.
 
 ## Universal Skill Installation
 
-To enable the skill across **all** installed AI CLIs on your machine (Claude Code, Antigravity, Codex):
+### Method 1: Using the `skills` CLI (Recommended — One-liner)
+
+Install globally for all AI Agents on your machine:
+```bash
+npx skills add phapit/agent-skills --skill ai-task-router -g
+```
+
+Or install locally for the current project only:
+```bash
+npx skills add phapit/agent-skills --skill ai-task-router
+```
+
+### Method 2: Manual Installation via Git & Symlink
 
 ```bash
 # Clone repository (if not already cloned)

@@ -30,7 +30,19 @@ Toàn bộ logic nằm trong file:
 
 ## Cài đặt Universal Skill
 
-Để kích hoạt skill cho **tất cả** các AI CLI trên máy (Claude Code, Antigravity, Codex):
+### Cách 1: Sử dụng `skills` CLI (Khuyến nghị — 1 dòng lệnh)
+
+Cài đặt toàn cục (Global) cho mọi AI Agent trên máy:
+```bash
+npx skills add phapit/agent-skills --skill ai-task-router -g
+```
+
+Hoặc chỉ cài cho project hiện tại:
+```bash
+npx skills add phapit/agent-skills --skill ai-task-router
+```
+
+### Cách 2: Cài đặt thủ công qua Git & Symlink
 
 ```bash
 # Clone repository (nếu chưa có)
