@@ -33,7 +33,11 @@ Toàn bộ logic nằm trong file:
 Để kích hoạt skill cho **tất cả** các AI CLI trên máy (Claude Code, Antigravity, Codex):
 
 ```bash
-cd ai-task-router
+# Clone repository (nếu chưa có)
+git clone https://github.com/phapit/agent-skills.git
+cd agent-skills/ai-task-router
+
+# Chạy installer
 ./install.sh
 ```
 

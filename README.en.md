@@ -33,7 +33,11 @@ packaged as the **Universal Skill** `ai-task-router`.
 To enable the skill across **all** installed AI CLIs on your machine (Claude Code, Antigravity, Codex):
 
 ```bash
-cd ai-task-router
+# Clone repository (if not already cloned)
+git clone https://github.com/phapit/agent-skills.git
+cd agent-skills/ai-task-router
+
+# Run installer
 ./install.sh
 ```
 
