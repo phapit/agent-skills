@@ -1,0 +1,12 @@
+{
+  "permissions": {
+    "terminal": {
+      "allow_workspace": true,
+      "require_approval_outside_workspace": true
+    },
+    "file_system": {
+      "workspace": "read-write",
+      "external": "ask"
+    }
+  }
+}

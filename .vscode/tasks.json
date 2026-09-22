@@ -1,0 +1,26 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "AI Router: Phân loại & điều phối task",
+      "type": "shell",
+      "command": "python3",
+      "args": [
+        "${workspaceFolder}/ai-task-router/classify_and_split_task.py",
+        "${input:routerPrompt}"
+      ],
+      "presentation": {
+        "reveal": "always",
+        "panel": "dedicated"
+      },
+      "problemMatcher": []
+    }
+  ],
+  "inputs": [
+    {
+      "id": "routerPrompt",
+      "type": "promptString",
+      "description": "Nhập yêu cầu nghiệp vụ cần phân loại và điều phối"
+    }
+  ]
+}

@@ -1,0 +1,40 @@
+{
+  "_note": "File này KHÔNG được claude/agy tự động nạp (đã kiểm chứng: schema settings.json thật của Claude Code ở ~/.claude/settings.json không có mục context.*, agy không có cờ đọc settings file nào). Dùng làm nguồn cấu hình chung để router (classify_and_split_task.py) hoặc script khác đọc và áp dụng thủ công - xem context-management.md để biết cách wire vào từng CLI.",
+  "context": {
+    "auto_compact": true,
+    "claude_max_token_threshold": 300000,
+    "agy_max_token_threshold": 600000,
+    "codex_max_token_threshold": 200000,
+    "soft_warning_ratio": 0.8,
+    "exclude_patterns": [
+      "**/node_modules/**",
+      "**/.git/**",
+      "**/dist/**",
+      "**/build/**",
+      "**/.next/**",
+      "**/*.log",
+      "**/tmp/**",
+      "**/.DS_Store",
+      "**/__pycache__/**",
+      "**/.venv/**",
+      "**/venv/**",
+      "**/vendor/**",
+      "**/coverage/**",
+      "**/*.min.js",
+      "**/*.min.css",
+      "**/*.map",
+      "**/package-lock.json",
+      "**/yarn.lock",
+      "**/pnpm-lock.yaml",
+      "**/poetry.lock",
+      "**/.cache/**",
+      "**/*.egg-info/**"
+    ],
+    "max_file_size_kb": 200
+  },
+  "fallback_chains": {
+    "antigravity": ["claude"],
+    "codex": ["claude"],
+    "claude": []
+  }
+}

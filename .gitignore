@@ -1,0 +1,13 @@
+# Python
+__pycache__/
+*.py[cod]
+
+# IDE
+.vscode/*
+!.vscode/tasks.json
+
+# Agents & Documentation
+AGENTS.md
+docs/
+.agents/*
+!.agents/mcp_config.json
