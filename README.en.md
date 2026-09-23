@@ -28,6 +28,27 @@ packaged as the **Universal Skill** `ai-task-router`.
 
 ---
 
+## Quick Installation for the 3 AI Model CLIs (Linux & macOS)
+
+Before using the Router, you can quickly install the 3 AI Model CLIs using the terminal one-liners below:
+
+### 1. Antigravity (`agy`)
+```bash
+curl -fsSL https://antigravity.google/cli/install.sh | bash
+```
+
+### 2. Claude Code (`claude`)
+```bash
+curl -fsSL https://claude.ai/install.sh | bash
+```
+
+### 3. Codex CLI (`codex`)
+```bash
+curl -fsSL https://chatgpt.com/codex/install.sh | sh
+```
+
+---
+
 ## Universal Skill Installation
 
 ### Method 1: Using the `skills` CLI (Recommended — One-liner)

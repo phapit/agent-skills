@@ -20,7 +20,25 @@ Skill này cung cấp cơ chế **Multi-Agent Orchestration** điều phối cô
 
 ---
 
-## 1. Cài đặt đa nền tảng (Universal Skill Discovery)
+## 1. Cài đặt nhanh 3 Model AI CLI (Linux & macOS)
+
+Nếu môi trường chưa có sẵn các CLI, hãy cài đặt nhanh qua các lệnh terminal:
+- **Antigravity (`agy`)**:
+  ```bash
+  curl -fsSL https://antigravity.google/cli/install.sh | bash
+  ```
+- **Claude Code (`claude`)**:
+  ```bash
+  curl -fsSL https://claude.ai/install.sh | bash
+  ```
+- **Codex CLI (`codex`)**:
+  ```bash
+  curl -fsSL https://chatgpt.com/codex/install.sh | sh
+  ```
+
+---
+
+## 2. Cài đặt đa nền tảng (Universal Skill Discovery)
 
 Để bất kỳ Agent nào (Claude Code, Antigravity, Codex) cũng có thể tự động nhận diện và sử dụng skill này:
 
@@ -40,7 +58,7 @@ Script sẽ tự động tạo symlink vào các vị trí chuẩn:
 
 ---
 
-## 2. Hướng dẫn dành cho Agent đang nhận yêu cầu
+## 3. Hướng dẫn dành cho Agent đang nhận yêu cầu
 
 Khi bạn (Claude, Antigravity, hoặc Codex) nhận được yêu cầu điều phối đa agent từ người dùng:
 
@@ -76,7 +94,7 @@ python3 <path_to_skill>/classify_and_split_task.py --enable antigravity,claude "
 
 ---
 
-## 3. Cơ chế vận hành & Báo cáo bàn giao
+## 4. Cơ chế vận hành & Báo cáo bàn giao
 
 - **Chạy song song**: Các sub-task được router dispatch đồng thời dưới dạng subprocess độc lập.
 - **Báo cáo bắt buộc**: Mọi task tạo/sửa code hoặc phân tích đều tự động ghi báo cáo bàn giao vào thư mục `.ai_router_reports/` trong project để các agent khác và người dùng dễ dàng review.
@@ -90,7 +108,7 @@ python3 <path_to_skill>/classify_and_split_task.py --enable antigravity,claude "
 
 ---
 
-## 4. Quản lý Context Token
+## 5. Quản lý Context Token
 
 Router đọc ngưỡng token từ `.agents/settings.json`:
 - **Claude Code**: 300.000 token (tự động compact qua `--autocompact`).
@@ -99,7 +117,7 @@ Router đọc ngưỡng token từ `.agents/settings.json`:
 
 ---
 
-## 5. Cấu hình Bật / Tắt Model mặc định trong `settings.json`
+## 6. Cấu hình Bật / Tắt Model mặc định trong `settings.json`
 
 Để tắt hẳn một Model mà không cần truyền cờ CLI mỗi lần chạy, chỉnh sửa mục `enabled_agents` trong `.agents/settings.json`:
 ```json

@@ -28,6 +28,27 @@ Toàn bộ logic nằm trong file:
 
 ---
 
+## Cài đặt nhanh 3 Model AI CLI (Linux & macOS)
+
+Trước khi sử dụng Router, bạn có thể cài đặt nhanh các CLI của 3 Model AI thông qua các lệnh terminal sau:
+
+### 1. Antigravity (`agy`)
+```bash
+curl -fsSL https://antigravity.google/cli/install.sh | bash
+```
+
+### 2. Claude Code (`claude`)
+```bash
+curl -fsSL https://claude.ai/install.sh | bash
+```
+
+### 3. Codex CLI (`codex`)
+```bash
+curl -fsSL https://chatgpt.com/codex/install.sh | sh
+```
+
+---
+
 ## Cài đặt Universal Skill
 
 ### Cách 1: Sử dụng `skills` CLI (Khuyến nghị — 1 dòng lệnh)

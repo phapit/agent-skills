@@ -43,7 +43,20 @@ for cmd in python3 agy claude codex tmux; do
   if command -v "$cmd" >/dev/null 2>&1; then
     echo "  [✓] $cmd: $(which "$cmd")"
   else
-    echo "  [✗] $cmd: Chưa cài đặt / không có trên PATH"
+    case "$cmd" in
+      agy)
+        echo "  [✗] agy: Chưa cài đặt -> Cài đặt nhanh: curl -fsSL https://antigravity.google/cli/install.sh | bash"
+        ;;
+      claude)
+        echo "  [✗] claude: Chưa cài đặt -> Cài đặt nhanh: curl -fsSL https://claude.ai/install.sh | bash"
+        ;;
+      codex)
+        echo "  [✗] codex: Chưa cài đặt -> Cài đặt nhanh: curl -fsSL https://chatgpt.com/codex/install.sh | sh"
+        ;;
+      *)
+        echo "  [✗] $cmd: Chưa cài đặt / không có trên PATH"
+        ;;
+    esac
   fi
 done
 

@@ -570,6 +570,7 @@ async def print_quota_status(
         print(f"    Còn lại {agy_quota['remaining_percent']}% - reset lúc {agy_quota['reset_at']}")
     else:
         print("    Không đọc được / CLI 'agy' chưa sẵn sàng.")
+        print("    -> Cài đặt nhanh: curl -fsSL https://antigravity.google/cli/install.sh | bash")
 
     print("[2] Claude Code (Current session):")
     if not enabled_agents.get("claude", True):
@@ -578,6 +579,7 @@ async def print_quota_status(
         print(f"    Đã dùng {claude_quota['used_percent']}% - reset lúc {claude_quota['resets']}")
     else:
         print("    Không đọc được / CLI 'claude' chưa sẵn sàng.")
+        print("    -> Cài đặt nhanh: curl -fsSL https://claude.ai/install.sh | bash")
 
     print("[3] Codex CLI:")
     if not enabled_agents.get("codex", True):
@@ -586,6 +588,7 @@ async def print_quota_status(
         print(f"    {codex_status['version']} - Sẵn sàng ({codex_status['status']})")
     else:
         print("    Không tìm thấy lệnh 'codex' trên PATH.")
+        print("    -> Cài đặt nhanh: curl -fsSL https://chatgpt.com/codex/install.sh | sh")
 
     print("-" * 55)
     print("TRẠNG THÁI KÍCH HOẠT & THỨ TỰ FALLBACK:")
