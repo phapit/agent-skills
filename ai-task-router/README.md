@@ -170,11 +170,11 @@ Người dùng có thể tự cấu hình thứ tự fallback theo nhu cầu:
 
 ---
 
-## Chế độ AI Supervisor & Quality Gate (Phương án A + C)
+## Chế độ AI Supervisor & Quality Gate (Phương án A + B)
 
 Thay vì chỉ điều khiển bằng code Python cứng nhắc, bạn có thể chỉ định một **AI Model đóng vai trò Supervisor (Tech Lead)**:
 - **Phương án A (Terminal Control):** Giám sát trực tiếp các terminal tmux của Worker (`agy_worker`, `codex_worker`, `claude_worker`), đọc màn hình terminal và gửi phím xác nhận khi Worker gặp prompt `[y/N]`.
-- **Phương án C (Quality Gate):** Nghiệm thu độc lập sau khi Worker hoàn tất — tự động kiểm tra `git diff` và chạy test suite (`pytest`, `npm test`...) để đảm bảo chất lượng code trước khi bàn giao.
+- **Phương án B (Quality Gate):** Nghiệm thu độc lập sau khi Worker hoàn tất — tự động kiểm tra `git diff` và chạy test suite (`pytest`, `npm test`...) để đảm bảo chất lượng code trước khi bàn giao.
 
 ```bash
 # Chỉ định Claude làm Supervisor kiêm Quality Gate

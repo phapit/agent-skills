@@ -170,11 +170,11 @@ You can customize the fallback priority to suit your workflow:
 
 ---
 
-## AI Supervisor & Quality Gate (Approach A + C)
+## AI Supervisor & Quality Gate (Approach A + B)
 
 Rather than relying purely on rigid script logic, you can designate an **AI Model to act as a Supervisor (Tech Lead)**:
 - **Approach A (Terminal Control):** Actively monitor tmux terminals running workers (`agy_worker`, `codex_worker`, `claude_worker`), inspect terminal panes, and send keystrokes/confirmations when workers encounter interactive prompts (`[y/N]`).
-- **Approach C (Quality Gate):** Independent verification after workers complete tasks — automatically inspect `git diff` and execute test suites (`pytest`, `npm test`...) to ensure code quality before final handoff.
+- **Approach B (Quality Gate):** Independent verification after workers complete tasks — automatically inspect `git diff` and execute test suites (`pytest`, `npm test`...) to ensure code quality before final handoff.
 
 ```bash
 # Designate Claude as Supervisor with Quality Gate
