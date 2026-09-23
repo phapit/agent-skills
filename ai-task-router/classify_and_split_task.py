@@ -18,10 +18,12 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import glob
 import json
 import os
 import re
 import shlex
+import shutil
 import sys
 import uuid
 from datetime import datetime
@@ -82,14 +84,16 @@ DEFAULT_FALLBACK_CHAINS = {
 
 
 def load_settings_data() -> dict:
-    if not SETTINGS_PATH:
-        return {}
-    try:
-        with open(SETTINGS_PATH, "r", encoding="utf-8") as f:
-            return json.load(f)
-    except (OSError, ValueError, json.JSONDecodeError) as e:
-        print(f"[Router] Cảnh báo: không đọc được {SETTINGS_PATH} ({e}).")
-        return {}
+    data = {}
+    for base in (GLOBAL_AGENTS_DIR, REPO_AGENTS_DIR):
+        candidate = os.path.join(base, "settings.json")
+        if os.path.isfile(candidate):
+            try:
+                with open(candidate, "r", encoding="utf-8") as f:
+                    data.update(json.load(f))
+            except (OSError, ValueError, json.JSONDecodeError) as e:
+                print(f"[Router] Cảnh báo: không đọc được {candidate} ({e}).")
+    return data
 
 
 SETTINGS_DATA = load_settings_data()
@@ -147,6 +151,119 @@ def load_supervisor_config() -> dict:
 
 
 SUPERVISOR_CONFIG = load_supervisor_config()
+
+DEFAULT_PROFILES_BASE = os.path.expanduser("~/.agents/profiles")
+
+
+def load_antigravity_profiles() -> list[str]:
+    raw_agy = SETTINGS_DATA.get("antigravity", {})
+    if isinstance(raw_agy, dict) and "profiles" in raw_agy:
+        profiles = raw_agy.get("profiles", [])
+        if isinstance(profiles, list) and profiles:
+            return [str(p).strip() for p in profiles if str(p).strip()]
+
+    raw_profiles = SETTINGS_DATA.get("antigravity_profiles")
+    if isinstance(raw_profiles, list) and raw_profiles:
+        return [str(p).strip() for p in raw_profiles if str(p).strip()]
+
+    return ["default"]
+
+
+def get_agy_profile_env(profile_name: str) -> dict[str, str] | None:
+    if profile_name in ("default", "", None):
+        return None
+    norm_name = profile_name
+    if not norm_name.startswith("antigravity_"):
+        folder_name = f"antigravity_{norm_name}"
+    else:
+        folder_name = norm_name
+
+    profile_dir = os.path.join(DEFAULT_PROFILES_BASE, folder_name)
+    os.makedirs(profile_dir, exist_ok=True)
+    env = os.environ.copy()
+    env["HOME"] = profile_dir
+    env["GEMINI_CLI_HOME"] = os.path.join(profile_dir, ".gemini")
+    # Cô lập hoàn toàn D-Bus keyring để không đọc/ghi đè token vào OS keyring chung của máy
+    env["DBUS_SESSION_BUS_ADDRESS"] = "unix:path=/dev/null"
+
+    user_gitconfig = os.path.expanduser("~/.gitconfig")
+    profile_gitconfig = os.path.join(profile_dir, ".gitconfig")
+    if os.path.isfile(user_gitconfig) and not os.path.exists(profile_gitconfig):
+        try:
+            os.symlink(user_gitconfig, profile_gitconfig)
+        except OSError:
+            pass
+    return env
+
+
+def get_agy_profile_email(profile_name: str) -> str | None:
+    """
+    Trích xuất địa chỉ email đã xác thực gần nhất của profile Antigravity.
+    """
+    if profile_name in ("default", "", None):
+        log_dir = os.path.expanduser("~/.gemini/antigravity-cli/log")
+    else:
+        norm_name = profile_name if profile_name.startswith("antigravity_") else f"antigravity_{profile_name}"
+        log_dir = os.path.join(DEFAULT_PROFILES_BASE, norm_name, ".gemini", "antigravity-cli", "log")
+
+    if not os.path.isdir(log_dir):
+        return None
+    logs = sorted(glob.glob(os.path.join(log_dir, "cli-*.log")), reverse=True)
+    for log_file in logs[:10]:
+        try:
+            with open(log_file, "r", encoding="utf-8", errors="ignore") as f:
+                content = f.read()
+            matches = re.findall(
+                r"(?:OAuth|consumerOAuth):\s+authenticated successfully as\s+([\w\.\+-]+@[\w\.-]+)",
+                content,
+            )
+            if matches:
+                return matches[-1]
+        except OSError:
+            continue
+    return None
+
+
+def is_agy_profile_ready(profile_name: str) -> bool:
+    if profile_name in ("default", "", None):
+        return True
+    norm_name = profile_name
+    if not norm_name.startswith("antigravity_"):
+        folder_name = f"antigravity_{norm_name}"
+    else:
+        folder_name = norm_name
+
+    profile_dir = os.path.join(DEFAULT_PROFILES_BASE, folder_name)
+    if not os.path.isdir(profile_dir):
+        return False
+    email = get_agy_profile_email(profile_name)
+    return bool(email) and os.path.isdir(os.path.join(profile_dir, ".gemini"))
+
+
+def wrap_agy_profile_cmd(cmd_args: list[str], profile_name: str | None) -> list[str]:
+    """
+    Bọc lệnh gọi Antigravity trong session D-Bus và GNOME Keyring biệt lập
+    để token OAuth được lưu vào keyring riêng của profile thay vì keyring chung của máy.
+    """
+    if profile_name in ("default", "", None):
+        return cmd_args
+    if not shutil.which("dbus-run-session") or not shutil.which("gnome-keyring-daemon"):
+        return cmd_args
+
+    norm_name = profile_name if profile_name.startswith("antigravity_") else f"antigravity_{profile_name}"
+    profile_dir = os.path.join(DEFAULT_PROFILES_BASE, norm_name)
+    keyring_dir = os.path.join(profile_dir, ".keyring")
+    share_dir = os.path.join(profile_dir, ".local", "share", "keyrings")
+    os.makedirs(keyring_dir, mode=0o700, exist_ok=True)
+    os.makedirs(share_dir, mode=0o700, exist_ok=True)
+
+    quoted_args = " ".join(shlex.quote(a) for a in cmd_args)
+    shell_cmd = (
+        f'export XDG_DATA_HOME="{profile_dir}/.local/share"; '
+        f'eval $(gnome-keyring-daemon --start --components=secrets --control-directory="{keyring_dir}"); '
+        f'exec {quoted_args}'
+    )
+    return ["dbus-run-session", "--", "sh", "-c", shell_cmd]
 
 
 def load_context_token_limits() -> tuple[int, int, int]:
@@ -309,7 +426,14 @@ def classify_and_split_task(
     if chains is None:
         chains = FALLBACK_CHAINS
 
-    clauses = [c.strip() for c in re.split(r"[.;\n]| và | and ", user_prompt) if c.strip()]
+    # Chỉ tách ở dấu chấm KẾT CÂU. Dấu chấm nằm giữa hai ký tự chữ/số là một phần
+    # của tên file (interview.html), đường dẫn (base.py) hoặc số thập phân —
+    # tách ở đó sẽ băm nhỏ tên file thành các sub-task cụt nghĩa.
+    clauses = [
+        c.strip()
+        for c in re.split(r"\.(?![A-Za-z0-9])|[;\n]| và | and ", user_prompt)
+        if c.strip()
+    ]
 
     raw_assignments: list[tuple[str, str]] = []
 
@@ -507,10 +631,11 @@ def build_base_prompt(task: str, cwd: str, ctx: dict, is_readonly: bool = False,
     return prompt
 
 
-async def run_capture(cmd_args: list[str]) -> tuple[int, str]:
+async def run_capture(cmd_args: list[str], env: dict | None = None) -> tuple[int, str]:
     try:
         process = await asyncio.create_subprocess_exec(
             *cmd_args,
+            env=env,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
@@ -538,8 +663,11 @@ def parse_claude_quota(output: str) -> dict | None:
     return {"used_percent": int(match.group(1)), "resets": match.group(2).strip()}
 
 
-async def check_agy_quota() -> dict | None:
-    _, output = await run_capture([ANTIGRAVITY_CMD, "-p", "/usage"])
+async def check_agy_quota(env: dict | None = None, profile_name: str | None = None) -> dict | None:
+    cmd_args = [ANTIGRAVITY_CMD, "--print-timeout", "5s", "-p", "/usage"]
+    if profile_name:
+        cmd_args = wrap_agy_profile_cmd(cmd_args, profile_name)
+    _, output = await run_capture(cmd_args, env=env)
     return parse_agy_quota(output)
 
 
@@ -559,17 +687,31 @@ async def print_quota_status(
     cwd: str,
     enabled_agents: dict[str, bool] | None = None,
     chains: dict[str, list[str]] | None = None,
+    agy_profiles: list[str] | None = None,
 ) -> None:
     if enabled_agents is None:
         enabled_agents = load_enabled_agents()
     if chains is None:
         chains = FALLBACK_CHAINS
+    if agy_profiles is None:
+        agy_profiles = load_antigravity_profiles()
 
-    agy_coro = check_agy_quota() if enabled_agents.get("antigravity", True) else asyncio.sleep(0, result=None)
+    async def get_all_agy_quotas():
+        results = []
+        for p in agy_profiles:
+            env = get_agy_profile_env(p)
+            if not is_agy_profile_ready(p):
+                results.append((p, None))
+                continue
+            quota = await check_agy_quota(env=env, profile_name=p)
+            results.append((p, quota))
+        return results
+
+    agy_coro = get_all_agy_quotas() if enabled_agents.get("antigravity", True) else asyncio.sleep(0, result=[])
     claude_coro = check_claude_quota() if enabled_agents.get("claude", True) else asyncio.sleep(0, result=None)
     codex_coro = check_codex_status() if enabled_agents.get("codex", True) else asyncio.sleep(0, result=None)
 
-    agy_quota, claude_quota, codex_status = await asyncio.gather(
+    agy_results, claude_quota, codex_status = await asyncio.gather(
         agy_coro, claude_coro, codex_coro
     )
 
@@ -580,8 +722,23 @@ async def print_quota_status(
     print("[1] Antigravity (Gemini, Five Hour Limit):")
     if not enabled_agents.get("antigravity", True):
         print("    [TẮT] Đang bị tắt theo cấu hình.")
-    elif agy_quota:
-        print(f"    Còn lại {agy_quota['remaining_percent']}% - reset lúc {agy_quota['reset_at']}")
+    elif agy_results:
+        email_map: dict[str, list[str]] = {}
+        for p_name, q in agy_results:
+            p_label = f"Worker '{p_name}'" if p_name != "default" else "Mặc định"
+            email = get_agy_profile_email(p_name)
+            email_info = f" ({email})" if email else " (Chưa có tài khoản)"
+            if email:
+                email_map.setdefault(email, []).append(p_name)
+            if q:
+                print(f"    • {p_label}{email_info}: Còn lại {q['remaining_percent']}% - reset lúc {q['reset_at']}")
+            else:
+                print(f"    • {p_label}{email_info}: Chưa đăng nhập / Không đọc được quota")
+
+        for email, p_list in email_map.items():
+            if len(p_list) > 1:
+                print(f"    [!] CẢNH BÁO: Các worker {p_list} đang dùng CHUNG tài khoản Google ({email})!")
+                print(f"        -> Để tách biệt, chạy: python3 ai-task-router/profile_manager.py login antigravity <worker>")
     else:
         print("    Không đọc được / CLI 'agy' chưa sẵn sàng.")
         print("    -> Cài đặt nhanh: curl -fsSL https://antigravity.google/cli/install.sh | bash")
@@ -615,12 +772,19 @@ async def print_quota_status(
     print("=" * 55 + "\n")
 
 
-async def run_agent(agent_name: str, cmd_args: list[str], cwd: str | None = None) -> int:
+async def run_agent(
+    agent_name: str,
+    cmd_args: list[str],
+    cwd: str | None = None,
+    env: dict | None = None,
+    output_collector: list[str] | None = None,
+) -> int:
     print(f"[{agent_name}] Bắt đầu: {' '.join(shlex.quote(a) for a in cmd_args)}")
     try:
         process = await asyncio.create_subprocess_exec(
             *cmd_args,
             cwd=cwd,
+            env=env,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
@@ -633,7 +797,10 @@ async def run_agent(agent_name: str, cmd_args: list[str], cwd: str | None = None
             line = await stream.readline()
             if not line:
                 break
-            print(f"[{prefix}] {line.decode('utf-8', errors='replace').rstrip()}")
+            decoded = line.decode('utf-8', errors='replace').rstrip()
+            if output_collector is not None:
+                output_collector.append(decoded)
+            print(f"[{prefix}] {decoded}")
 
     await asyncio.gather(
         stream_output(process.stdout, agent_name),
@@ -700,49 +867,252 @@ async def run_codex_agent(prompt: str, question_path: str, cwd: str = ".") -> in
 
 AGY_USAGE_FALLBACK_THRESHOLD = 90
 
+QUOTA_ERROR_PATTERNS = [
+    r"ResourceExhausted",
+    r"429\s+Too\s+Many\s+Requests",
+    r"quota\s+exceeded",
+    r"rate\s+limit",
+    r"Five\s+Hour\s+Limit",
+    r"Usage\s+limit\s+reached",
+    r"credit\s+limit",
+]
 
-async def antigravity_usage_exceeded() -> bool:
-    quota = await check_agy_quota()
+
+def is_quota_exhausted_error(exit_code: int, output_text: str) -> bool:
+    if exit_code == 99:
+        return True
+    for pattern in QUOTA_ERROR_PATTERNS:
+        if re.search(pattern, output_text, re.IGNORECASE):
+            return True
+    return False
+
+
+async def antigravity_usage_exceeded(env: dict | None = None, profile_name: str | None = None) -> bool:
+    quota = await check_agy_quota(env=env, profile_name=profile_name)
     if quota is None:
         return False
     used_percent = 100 - quota["remaining_percent"]
     return used_percent > AGY_USAGE_FALLBACK_THRESHOLD
 
 
+async def ensure_worker_handoff_report(
+    worker_name: str,
+    task: str,
+    report_path: str,
+    cwd: str,
+    env: dict | None = None,
+    captured_output: str = "",
+) -> str:
+    """
+    Đảm bảo có báo cáo bàn giao hoàn chỉnh trước khi chuyển giao sang worker mới.
+    1. Nếu worker cũ đã tạo file báo cáo hợp lệ -> đọc và bổ sung ghi chú bàn giao.
+    2. Nếu chưa có -> thử yêu cầu worker cũ tạo báo cáo tổng kết.
+    3. Nếu worker cũ bị chặn API (429/quota) -> router tự động trích xuất git diff
+       và output gần nhất để tạo báo cáo bàn giao đầy đủ cho worker tiếp theo.
+    """
+    if report_path and os.path.isfile(report_path):
+        try:
+            with open(report_path, "r", encoding="utf-8") as f:
+                content = f.read().strip()
+            if len(content) > 50:
+                print(f"[Router Handoff] Worker '{worker_name}' đã có sẵn báo cáo bàn giao tại: {report_path}")
+                return content
+        except OSError:
+            pass
+
+    # Thử yêu cầu worker cũ viết báo cáo bàn giao nếu API còn phản hồi được
+    if report_path:
+        try:
+            handoff_prompt = (
+                f"Phiên làm việc của bạn ({worker_name}) đã đạt giới hạn token/quota và chuẩn bị bàn giao cho worker tiếp theo.\n"
+                f"YÊU CẦU BẮT BUỘC: Hãy tạo file báo cáo bàn giao tại đường dẫn: {report_path}\n"
+                "Nội dung gồm:\n"
+                f"- Nhiệm vụ: {task}\n"
+                f"- Worker bàn giao: {worker_name}\n"
+                "- Trạng thái: Đang thực hiện dở dang, chuyển tiếp cho worker mới\n"
+                "- Chi tiết các việc đã làm xong\n"
+                "- Các việc còn lại cần làm tiếp\n"
+                "- Danh sách các file đã tạo hoặc sửa đổi\n"
+            )
+            cmd_args = [ANTIGRAVITY_CMD, "--continue", "--dangerously-skip-permissions", "-p", handoff_prompt]
+            code = await run_agent(f"Antigravity ({worker_name}) [Handoff]", cmd_args, cwd=cwd, env=env)
+            if code == 0 and os.path.isfile(report_path):
+                with open(report_path, "r", encoding="utf-8") as f:
+                    content = f.read().strip()
+                if len(content) > 50:
+                    print(f"[Router Handoff] Worker '{worker_name}' đã viết xong báo cáo bàn giao tại: {report_path}")
+                    return content
+        except Exception as e:
+            print(f"[Router Handoff] Worker '{worker_name}' không thể ghi báo cáo bàn giao ({e}).")
+
+    # Fallback Router-level Synthesizer: tự động tổng hợp từ git diff và log
+    print(f"[Router Handoff] Tự động tổng hợp báo cáo bàn giao từ thay đổi Git thực tế...")
+    diff_status = ""
+    diff_stat = ""
+    try:
+        st_code, st_out = await run_capture(["git", "status", "--short"], env=env)
+        if st_code == 0:
+            diff_status = st_out.strip()
+        df_code, df_out = await run_capture(["git", "diff", "--stat"], env=env)
+        if df_code == 0:
+            diff_stat = df_out.strip()
+    except Exception:
+        pass
+
+    synthesized_content = (
+        f"# Báo Cáo Bàn Giao Tiến Độ (Chuyển Giao Worker Tự Động)\n\n"
+        f"- **Nhiệm vụ:** {task}\n"
+        f"- **Worker thực hiện trước:** {worker_name} (Antigravity)\n"
+        f"- **Lý do chuyển giao:** Đạt giới hạn token / cạn hạn mức quota API (5-hour limit hoặc rate limit).\n"
+        f"- **Trạng thái:** Đang thực hiện dở dang, sẵn sàng cho worker tiếp theo tiếp quản.\n\n"
+        f"## 1. Các tệp đã thay đổi trên workspace\n\n"
+        f"```text\n"
+        f"{diff_status or '(Chưa có thay đổi tệp nào được ghi nhận)'}\n"
+        f"```\n\n"
+        f"```text\n"
+        f"{diff_stat}\n"
+        f"```\n\n"
+        f"## 2. Hướng dẫn tiếp quản cho Worker kế tiếp\n"
+        f"- Worker trước ({worker_name}) đã bị dừng do đạt ngưỡng quota/token.\n"
+        f"- Worker mới cần kiểm tra các tệp thay đổi ở trên, kế thừa công việc hiện tại và tiếp tục hoàn thiện mục tiêu của task:\n"
+        f"  `{task}`\n"
+    )
+
+    if report_path:
+        try:
+            os.makedirs(os.path.dirname(os.path.abspath(report_path)), exist_ok=True)
+            with open(report_path, "w", encoding="utf-8") as f:
+                f.write(synthesized_content)
+            print(f"[Router Handoff] Đã tạo thành công báo cáo bàn giao tại: {report_path}")
+        except OSError as e:
+            print(f"[Router Handoff CẢNH BÁO] Không ghi được file {report_path}: {e}")
+
+    return synthesized_content
+
+
 async def run_antigravity_agent(
     prompt: str,
     question_path: str,
+    task: str = "",
+    report_path: str = "",
     cwd: str = ".",
     conversation_id: str | None = None,
     agy_continue: bool = False,
+    profiles: list[str] | None = None,
 ) -> int:
-    if await antigravity_usage_exceeded():
-        print(f"[Router] Antigravity usage > {AGY_USAGE_FALLBACK_THRESHOLD}% (cạn quota 5h).")
-        return 99
+    worker_pool = profiles if profiles else load_antigravity_profiles()
+    if not worker_pool:
+        worker_pool = ["default"]
 
-    cmd_args = [ANTIGRAVITY_CMD, "--dangerously-skip-permissions"]
-    if conversation_id:
-        cmd_args.extend(["--conversation", conversation_id])
-    elif agy_continue:
-        cmd_args.append("--continue")
-    cmd_args.extend(["-p", prompt])
+    current_prompt = prompt
+    last_exit_code = 1
 
-    while True:
-        exit_code = await run_agent("Antigravity", cmd_args, cwd=cwd)
-        if not os.path.exists(question_path):
-            return exit_code
+    for idx, worker_name in enumerate(worker_pool):
+        is_last_worker = (idx == len(worker_pool) - 1)
+        worker_label = f"worker:{worker_name}" if worker_name != "default" else "default"
+        worker_env = get_agy_profile_env(worker_name)
 
-        with open(question_path, "r", encoding="utf-8") as f:
-            question_text = f.read()
-        os.remove(question_path)
+        if not is_agy_profile_ready(worker_name):
+            print(
+                f"[Antigravity Pool] CẢNH BÁO: Profile '{worker_name}' chưa được đăng nhập "
+                f"(gợi ý: python3 ai-task-router/profile_manager.py login antigravity {worker_name}) -> Bỏ qua."
+            )
+            continue
 
-        answer = await ask_user(question_text)
+        if await antigravity_usage_exceeded(env=worker_env, profile_name=worker_name):
+            print(f"[Antigravity Pool] Profile '{worker_name}' usage > {AGY_USAGE_FALLBACK_THRESHOLD}% (cạn quota 5h).")
+            if not is_last_worker:
+                print(f"[Antigravity Pool] -> Tự động chuyển sang profile tiếp theo trong pool...")
+                continue
+            else:
+                print(f"[Antigravity Pool] Toàn bộ worker trong pool đều đã hết quota.")
+                return 99
+
+        print(f"\n[Antigravity Pool] >>> Bắt đầu xử lý bởi [{worker_label.upper()}] <<<")
         cmd_args = [ANTIGRAVITY_CMD, "--dangerously-skip-permissions"]
         if conversation_id:
             cmd_args.extend(["--conversation", conversation_id])
-        else:
+        elif agy_continue:
             cmd_args.append("--continue")
-        cmd_args.extend(["-p", answer])
+        cmd_args.extend(["-p", current_prompt])
+
+        worker_exhausted = False
+        while True:
+            captured_lines: list[str] = []
+            wrapped_cmd_args = wrap_agy_profile_cmd(cmd_args, worker_name)
+            exit_code = await run_agent(
+                f"Antigravity [{worker_label}]",
+                wrapped_cmd_args,
+                cwd=cwd,
+                env=worker_env,
+                output_collector=captured_lines,
+            )
+            last_exit_code = exit_code
+            output_text = "\n".join(captured_lines)
+
+            # Kiểm tra xem có lỗi cạn quota / 429 hay không
+            if is_quota_exhausted_error(exit_code, output_text):
+                print(f"[Antigravity Pool] Phát hiện Worker '{worker_name}' cạn hạn mức token/quota trong phiên!")
+                worker_exhausted = True
+                break
+
+            if not os.path.exists(question_path):
+                # Không có câu hỏi nào đang chờ -> kết thúc lượt chạy của worker này
+                break
+
+            # Có câu hỏi cần người dùng giải đáp
+            with open(question_path, "r", encoding="utf-8") as f:
+                question_text = f.read()
+            os.remove(question_path)
+
+            answer = await ask_user(question_text)
+            cmd_args = [ANTIGRAVITY_CMD, "--dangerously-skip-permissions"]
+            if conversation_id:
+                cmd_args.extend(["--conversation", conversation_id])
+            else:
+                cmd_args.append("--continue")
+            cmd_args.extend(["-p", answer])
+
+        if not worker_exhausted and last_exit_code == 0:
+            # Thành công trọn vẹn
+            return 0
+
+        if worker_exhausted:
+            # Bắt buộc tạo tài liệu bàn giao trước khi chuyển giao sang worker mới
+            print(f"[Antigravity Pool] Chuẩn bị chuyển giao: Đảm bảo tài liệu bàn giao từ '{worker_name}'...")
+            handoff_content = await ensure_worker_handoff_report(
+                worker_name=worker_name,
+                task=task,
+                report_path=report_path,
+                cwd=cwd,
+                env=worker_env,
+                captured_output=output_text,
+            )
+
+            if not is_last_worker:
+                next_worker = worker_pool[idx + 1]
+                print(f"[Antigravity Pool] >>> CHUYỂN GIAO TIẾN ĐỘ: '{worker_name}' -> '{next_worker}' <<<")
+                handoff_directive = (
+                    f"\n\n--- THÔNG TIN TIẾP QUẢN TỪ WORKER TRƯỚC ({worker_name}) ---\n"
+                    f"Worker trước ({worker_name}) đã đạt giới hạn token/quota và đã lập tài liệu bàn giao.\n"
+                    f"Dưới đây là BÁO CÁO BÀN GIAO:\n\n{handoff_content}\n\n"
+                    f"--- CHỈ DẪN CHO BẠN ({next_worker}) ---\n"
+                    f"Hãy đọc kỹ báo cáo bàn giao trên, kiểm tra workspace hiện tại và tiếp tục hoàn thiện mục tiêu của task:\n"
+                    f"{task}\n"
+                )
+                current_prompt = prompt + handoff_directive
+                # Reset conversation_id và agy_continue cho worker mới vì đây là profile mới
+                conversation_id = None
+                agy_continue = False
+                continue
+            else:
+                print(f"[Antigravity Pool] Toàn bộ worker trong pool đã đạt giới hạn quota.")
+                return 99
+
+        # Nếu thất bại vì lý do khác (không phải quota):
+        return last_exit_code
+
+    return last_exit_code
 
 
 async def execute_task_with_fallback_chain(
@@ -755,6 +1125,7 @@ async def execute_task_with_fallback_chain(
     lang: str | None = None,
     agy_conversation: str | None = None,
     agy_continue: bool = False,
+    agy_profiles: list[str] | None = None,
 ) -> int:
     """
     Thực thi một task theo chuỗi fallback cấu hình:
@@ -797,9 +1168,12 @@ async def execute_task_with_fallback_chain(
                 exit_code = await run_antigravity_agent(
                     antigravity_prompt,
                     ctx["question_path"],
+                    task=task,
+                    report_path=ctx["report_path"],
                     cwd=cwd,
                     conversation_id=agy_conversation,
                     agy_continue=agy_continue,
+                    profiles=agy_profiles,
                 )
             elif current_agent == "codex":
                 codex_prompt = base_prompt + confirmation_directive_text(ctx["question_path"], lang=lang)
@@ -856,6 +1230,7 @@ async def dispatch(
     overall_lang: str = "vi",
     agy_conversation: str | None = None,
     agy_continue: bool = False,
+    agy_profiles: list[str] | None = None,
 ) -> None:
     if enabled_agents is None:
         enabled_agents = load_enabled_agents()
@@ -892,6 +1267,7 @@ async def dispatch(
                     lang=task_lang,
                     agy_conversation=agy_conversation,
                     agy_continue=agy_continue,
+                    agy_profiles=agy_profiles,
                 )
             )
 
@@ -954,6 +1330,10 @@ def main() -> None:
     parser.add_argument(
         "--agy-conversation", default=None,
         help="Khôi phục phiên làm việc của Antigravity theo Conversation ID ('agy --conversation <ID>').",
+    )
+    parser.add_argument(
+        "--agy-profiles", default=None,
+        help="Danh sách profile của Antigravity phân cách bằng dấu phẩy (ví dụ: 'worker1,worker2,worker3')",
     )
     parser.add_argument(
         "--no-codex", dest="disable_codex", action="store_true",
@@ -1040,8 +1420,12 @@ def main() -> None:
     if args.fallback:
         chains = parse_fallback_cli_arg(args.fallback)
 
+    agy_profiles = None
+    if args.agy_profiles:
+        agy_profiles = [p.strip() for p in args.agy_profiles.split(",") if p.strip()]
+
     if args.check_quota:
-        asyncio.run(print_quota_status(os.getcwd(), enabled_agents, chains))
+        asyncio.run(print_quota_status(os.getcwd(), enabled_agents, chains, agy_profiles=agy_profiles))
         return
 
     if not args.prompt:
@@ -1080,6 +1464,7 @@ def main() -> None:
             overall_lang=user_lang,
             agy_conversation=args.agy_conversation,
             agy_continue=args.agy_continue,
+            agy_profiles=agy_profiles,
         )
     )
 

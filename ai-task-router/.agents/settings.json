@@ -5,6 +5,10 @@
     "codex": true,
     "claude": true
   },
+  "antigravity": {
+    "profiles": ["worker1", "worker2", "worker3"],
+    "quota_threshold_percent": 90
+  },
   "context": {
     "auto_compact": true,
     "claude_max_token_threshold": 300000,

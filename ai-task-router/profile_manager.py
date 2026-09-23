@@ -7,7 +7,10 @@ Cho phép khởi tạo, đăng nhập và chạy session với biến môi trư�
 from __future__ import annotations
 
 import argparse
+import glob
 import os
+import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -57,6 +60,8 @@ def get_profile_env(agent: str, profile_name: str = "supervisor") -> dict[str, s
         env["CODEX_HOME"] = os.path.join(profile_dir, ".codex")
     elif norm_agent == "antigravity":
         env["GEMINI_CLI_HOME"] = os.path.join(profile_dir, ".gemini")
+        # Cô lập hoàn toàn D-Bus keyring để không đọc/ghi đè token vào OS keyring chung của máy
+        env["DBUS_SESSION_BUS_ADDRESS"] = "unix:path=/dev/null"
 
     # Đảm bảo symlink gitconfig từ user gốc nếu có để agent commit được
     user_gitconfig = os.path.expanduser("~/.gitconfig")
@@ -70,6 +75,32 @@ def get_profile_env(agent: str, profile_name: str = "supervisor") -> dict[str, s
     return env
 
 
+def get_profile_email(agent: str, profile_name: str = "supervisor") -> str | None:
+    """
+    Trích xuất địa chỉ email đã xác thực gần nhất trong profile.
+    """
+    norm_agent = normalize_agent_name(agent)
+    profile_dir = get_profile_dir(norm_agent, profile_name)
+    if norm_agent == "antigravity":
+        log_dir = os.path.join(profile_dir, ".gemini", "antigravity-cli", "log")
+        if not os.path.isdir(log_dir):
+            return None
+        logs = sorted(glob.glob(os.path.join(log_dir, "cli-*.log")), reverse=True)
+        for log_file in logs[:10]:
+            try:
+                with open(log_file, "r", encoding="utf-8", errors="ignore") as f:
+                    content = f.read()
+                matches = re.findall(
+                    r"(?:OAuth|consumerOAuth):\s+authenticated successfully as\s+([\w\.\+-]+@[\w\.-]+)",
+                    content,
+                )
+                if matches:
+                    return matches[-1]
+            except OSError:
+                continue
+    return None
+
+
 def is_profile_initialized(agent: str, profile_name: str = "supervisor") -> bool:
     norm_agent = normalize_agent_name(agent)
     profile_dir = get_profile_dir(norm_agent, profile_name)
@@ -77,7 +108,8 @@ def is_profile_initialized(agent: str, profile_name: str = "supervisor") -> bool
         return False
 
     if norm_agent == "antigravity":
-        return os.path.isdir(os.path.join(profile_dir, ".gemini"))
+        email = get_profile_email(norm_agent, profile_name)
+        return bool(email) and os.path.isdir(os.path.join(profile_dir, ".gemini"))
     elif norm_agent == "claude":
         return os.path.isdir(os.path.join(profile_dir, ".claude")) or os.path.isfile(
             os.path.join(profile_dir, ".claude.json")
@@ -85,6 +117,32 @@ def is_profile_initialized(agent: str, profile_name: str = "supervisor") -> bool
     elif norm_agent == "codex":
         return os.path.isdir(os.path.join(profile_dir, ".codex"))
     return False
+
+
+def wrap_agy_profile_cmd(cmd_args: list[str], profile_name: str) -> list[str]:
+    """
+    Bọc lệnh gọi Antigravity trong session D-Bus và GNOME Keyring biệt lập
+    để token OAuth được lưu vào keyring riêng của profile thay vì keyring chung của máy.
+    """
+    if profile_name in ("default", "", None):
+        return cmd_args
+    if not shutil.which("dbus-run-session") or not shutil.which("gnome-keyring-daemon"):
+        return cmd_args
+
+    norm_name = profile_name if profile_name.startswith("antigravity_") else f"antigravity_{profile_name}"
+    profile_dir = os.path.join(DEFAULT_PROFILES_BASE, norm_name)
+    keyring_dir = os.path.join(profile_dir, ".keyring")
+    share_dir = os.path.join(profile_dir, ".local", "share", "keyrings")
+    os.makedirs(keyring_dir, mode=0o700, exist_ok=True)
+    os.makedirs(share_dir, mode=0o700, exist_ok=True)
+
+    quoted_args = " ".join(shlex.quote(a) for a in cmd_args)
+    shell_cmd = (
+        f'export XDG_DATA_HOME="{profile_dir}/.local/share"; '
+        f'eval $(gnome-keyring-daemon --start --components=secrets --control-directory="{keyring_dir}"); '
+        f'exec {quoted_args}'
+    )
+    return ["dbus-run-session", "--", "sh", "-c", shell_cmd]
 
 
 def launch_login(agent: str, profile_name: str = "supervisor") -> int:
@@ -104,8 +162,12 @@ def launch_login(agent: str, profile_name: str = "supervisor") -> int:
     print("Vui lòng hoàn tất đăng nhập theo hướng dẫn trên màn hình/trình duyệt.\n")
 
     env = get_profile_env(norm_agent, profile_name)
+    cmd_args = [cmd]
+    if norm_agent == "antigravity":
+        cmd_args = wrap_agy_profile_cmd([cmd], profile_name)
+
     try:
-        proc = subprocess.run([cmd], env=env)
+        proc = subprocess.run(cmd_args, env=env)
         return proc.returncode
     except FileNotFoundError:
         print(f"[LỖI] Không tìm thấy lệnh '{cmd}' trên PATH. Hãy cài đặt CLI trước.")
@@ -113,17 +175,19 @@ def launch_login(agent: str, profile_name: str = "supervisor") -> int:
 
 
 def list_profiles_status() -> None:
-    print("\n" + "=" * 60)
+    print("\n" + "=" * 65)
     print("DANH SÁCH PROFILE ĐỘC LẬP (MULTI-ACCOUNT)")
-    print("=" * 60)
+    print("=" * 65)
     os.makedirs(DEFAULT_PROFILES_BASE, exist_ok=True)
     profiles = sorted(os.listdir(DEFAULT_PROFILES_BASE))
     if not profiles:
         print("  (Chưa có profile nào được khởi tạo trong ~/.agents/profiles/)")
         print("\nĐể tạo profile mới:")
         print("  python3 profile_manager.py login <agent> [profile_name]")
-        print("=" * 60 + "\n")
+        print("=" * 65 + "\n")
         return
+
+    email_map: dict[str, list[str]] = {}
 
     for p in profiles:
         full_path = os.path.join(DEFAULT_PROFILES_BASE, p)
@@ -134,14 +198,31 @@ def list_profiles_status() -> None:
         p_name = parts[1] if len(parts) > 1 else "default"
         is_init = is_profile_initialized(agent, p_name)
         status = "ĐÃ ĐĂNG NHẬP / SẴN SÀNG" if is_init else "CHƯA HOÀN TẤT SETUP"
-        print(f"  • {p:<30} [{status}]")
+        email = get_profile_email(agent, p_name)
+        email_str = f" [Tài khoản: {email}]" if email else " [Chưa xác thực tài khoản]"
+        if email:
+            email_map.setdefault(email, []).append(p)
+        print(f"  • {p:<28} [{status}]{email_str}")
         print(f"    Thư mục: {full_path}")
-    print("=" * 60 + "\n")
+
+    # Cảnh báo nếu các profile bị trùng tài khoản
+    has_duplicate = False
+    for email, profs in email_map.items():
+        if len(profs) > 1:
+            if not has_duplicate:
+                print("\n  " + "-" * 61)
+                has_duplicate = True
+            print(f"  [!] CẢNH BÁO: Các profile {profs} đang dùng CHUNG tài khoản '{email}'!")
+            print(f"      -> Chạy 'python3 ai-task-router/profile_manager.py login <agent> <profile>' để đăng nhập tài khoản riêng biệt.")
+
+    print("=" * 65 + "\n")
 
 
 def run_in_profile(agent: str, profile_name: str, cmd_args: list[str]) -> int:
     norm_agent = normalize_agent_name(agent)
     env = get_profile_env(norm_agent, profile_name)
+    if norm_agent == "antigravity":
+        cmd_args = wrap_agy_profile_cmd(cmd_args, profile_name)
     proc = subprocess.run(cmd_args, env=env)
     return proc.returncode
 

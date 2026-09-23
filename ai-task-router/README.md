@@ -23,6 +23,7 @@ Toàn bộ logic nằm trong file:
 - **Tự động Fallback thông minh 3 tầng**:
   - Antigravity lỗi/timeout hoặc quota 5 giờ > 90% $\rightarrow$ Fallback sang Codex/Claude Code.
   - Codex lỗi $\rightarrow$ Fallback sang Claude Code.
+- **Antigravity Worker Pool & Tự động Failover (Auto-Handoff)**: Hỗ trợ đa profile (`worker1`, `worker2`, `worker3`). Khi một profile chạm hạn mức quota 5 giờ (> 90%) hoặc gặp lỗi `ResourceExhausted` / `429`, Router sẽ tự động lập báo cáo bàn giao chi tiết (tiến độ, `git diff`, tệp đã sửa) rồi chuyển giao liền mạch sang worker kế tiếp.
 - **Báo cáo bàn giao bắt buộc**: Mọi task phân tích/tạo-sửa code đều ghi 1 file markdown vào `.ai_router_reports/`.
 - **Kiểm tra trạng thái & Quota 3 Model**: Cờ `--check-quota` kiểm tra % hạn mức và trạng thái sẵn sàng của `agy`, `claude`, và `codex`.
 
@@ -108,6 +109,7 @@ Người dùng có thể tuỳ ý tắt bất kỳ Model AI nào trong 3 model (
 - `--no-agy` / `--no-antigravity`: Tắt nhanh Antigravity CLI.
 - `--agy-continue`: Tiếp tục phiên hội thoại gần nhất của Antigravity (`agy --continue`).
 - `--agy-conversation <ID>`: Chỉ định Conversation ID cụ thể để Antigravity khôi phục (`agy --conversation <ID>`).
+- `--agy-profiles <p1,p2,...>`: Chỉ định danh sách profile Antigravity làm pool luân chuyển (ví dụ: `--agy-profiles worker1,worker2,worker3`).
 - `--no-codex`: Tắt nhanh Codex CLI.
 - `--no-claude`: Tắt nhanh Claude Code CLI.
 - `--enable <agents>`: Chỉ bật các model được liệt kê (ví dụ: `--enable codex,claude`).
@@ -209,6 +211,44 @@ tmux new-session -s agy_supervisor "python3 ai-task-router/profile_manager.py ru
 ```
 
 Toàn bộ thông tin tài khoản và cấu hình của profile thứ 2 được cách ly an toàn trong `~/.agents/profiles/`.
+
+---
+
+## Antigravity Worker Pool & Tự động Chuyển giao (Auto-Failover)
+
+Nhằm giải quyết bài toán tài khoản Antigravity đạt giới hạn hạn mức (5-hour quota) hoặc lỗi quota token trong quá trình xử lý, Router hỗ trợ cơ chế **Worker Pool** luân chuyển giữa các profile (`worker1` $\rightarrow$ `worker2` $\rightarrow$ `worker3`):
+
+### 1. Đăng nhập các Profile độc lập
+Tạo và đăng nhập lần lượt 3 tài khoản Antigravity vào các thư mục profile biệt lập:
+```bash
+python3 ai-task-router/profile_manager.py login antigravity worker1
+python3 ai-task-router/profile_manager.py login antigravity worker2
+python3 ai-task-router/profile_manager.py login antigravity worker3
+```
+
+### 2. Cấu hình trong `settings.json` hoặc CLI
+Khai báo danh sách profile trong [`ai-task-router/.agents/settings.json`](ai-task-router/.agents/settings.json):
+```json
+{
+  "antigravity": {
+    "profiles": ["worker1", "worker2", "worker3"],
+    "quota_threshold_percent": 90
+  }
+}
+```
+Hoặc chỉ định trực tiếp qua cờ CLI:
+```bash
+python3 ai-task-router/classify_and_split_task.py --agy-profiles worker1,worker2,worker3 "yêu cầu..."
+```
+
+### 3. Quy trình Bàn giao Tự động (Auto-Handoff Protocol)
+Trước khi chuyển sang worker mới, Router đảm bảo **ngữ cảnh không bị mất mát**:
+1. **Kiểm tra Pre-flight Quota**: Trước khi gọi worker, router kiểm tra quota 5 giờ. Nếu đã vượt ngưỡng cấu hình (mặc định > 90%), worker sẽ tự động được bỏ qua để nhường chỗ cho worker sẵn sàng tiếp theo.
+2. **Bắt lỗi Quota Runtime**: Nếu worker đang xử lý mà gặp lỗi hết quota (`ResourceExhausted`, `429 Too Many Requests`, hoặc `quota exceeded`), Router kích hoạt quy trình chuyển giao.
+3. **Lập tài liệu bàn giao bắt buộc (`ensure_worker_handoff_report`)**:
+   - Router trích xuất hiện trạng công việc: tóm tắt tiến độ, `git status --short`, `git diff --stat`, và danh sách tệp đang chỉnh sửa.
+   - Ghi vào báo cáo bàn giao: `.ai_router_reports/<timestamp>_handoff_agy_<profile>.md`.
+4. **Tiếp nối liền mạch**: Worker mới kế tiếp (`worker2`) được kích hoạt và nạp toàn bộ nội dung bàn giao này vào prompt, tiếp tục hoàn thành các phần việc còn dở dang mà không cần người dùng can thiệp.
 
 ---
 

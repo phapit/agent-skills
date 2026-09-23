@@ -23,6 +23,7 @@ packaged as the **Universal Skill** `ai-task-router`.
 - **Intelligent 3-Level Fallback Chain**:
   - Antigravity error/timeout or 5-hour quota > 90% $\rightarrow$ Falls back to Codex/Claude Code.
   - Codex error $\rightarrow$ Falls back to Claude Code.
+- **Antigravity Worker Pool & Auto-Failover (Auto-Handoff)**: Supports multiple profiles (`worker1`, `worker2`, `worker3`). When a profile reaches its 5-hour quota limit (> 90%) or triggers a `ResourceExhausted` / `429` error, the Router automatically generates a comprehensive handoff report (progress, `git diff`, modified files) and smoothly hands over to the next worker.
 - **Mandatory Handoff Reporting**: Every code modification or analysis task writes a detailed markdown report into `.ai_router_reports/`.
 - **Status & Quota Monitoring**: The `--check-quota` flag inspects remaining limits and operational readiness across `agy`, `claude`, and `codex`.
 
@@ -108,6 +109,7 @@ End users can flexibly enable or disable any of the 3 AI models (`antigravity`, 
 - `--no-agy` / `--no-antigravity`: Quickly disable Antigravity CLI.
 - `--agy-continue`: Continue Antigravity's most recent conversation (`agy --continue`).
 - `--agy-conversation <ID>`: Resume Antigravity session by specific Conversation ID (`agy --conversation <ID>`).
+- `--agy-profiles <p1,p2,...>`: Specify a list of Antigravity profiles for worker pool rotation (e.g. `--agy-profiles worker1,worker2,worker3`).
 - `--no-codex`: Quickly disable Codex CLI.
 - `--no-claude`: Quickly disable Claude Code CLI.
 - `--enable <agents>`: Only enable the specified models (e.g. `--enable codex,claude`).
@@ -209,6 +211,44 @@ tmux new-session -s agy_supervisor "python3 ai-task-router/profile_manager.py ru
 ```
 
 All profile credentials and configurations are stored cleanly under `~/.agents/profiles/`.
+
+---
+
+## Antigravity Worker Pool & Auto-Failover (Auto-Handoff)
+
+To overcome token limits and the 5-hour rolling quota on Antigravity accounts, the Router supports a multi-worker pool rotation (`worker1` $\rightarrow$ `worker2` $\rightarrow$ `worker3`):
+
+### 1. Log in to Isolated Worker Profiles
+Initialize and authenticate 3 distinct Google accounts in separate profile directories:
+```bash
+python3 ai-task-router/profile_manager.py login antigravity worker1
+python3 ai-task-router/profile_manager.py login antigravity worker2
+python3 ai-task-router/profile_manager.py login antigravity worker3
+```
+
+### 2. Configure in `settings.json` or CLI
+Define the profile pool in [`ai-task-router/.agents/settings.json`](ai-task-router/.agents/settings.json):
+```json
+{
+  "antigravity": {
+    "profiles": ["worker1", "worker2", "worker3"],
+    "quota_threshold_percent": 90
+  }
+}
+```
+Or pass directly via command line flag:
+```bash
+python3 ai-task-router/classify_and_split_task.py --agy-profiles worker1,worker2,worker3 "your task..."
+```
+
+### 3. Automated Handoff Protocol
+Before rotating to a new worker, the Router guarantees **zero context loss**:
+1. **Pre-flight Quota Inspection**: Prior to invoking a worker, the Router checks its 5-hour quota. If it exceeds the threshold (default > 90%), the worker is preemptively skipped in favor of the next available profile.
+2. **Runtime Quota Detection**: If a worker hits a token ceiling (`ResourceExhausted`, `429 Too Many Requests`, or `quota exceeded`), the Router intercepts the failure and initiates handoff.
+3. **Mandatory Handoff Report (`ensure_worker_handoff_report`)**:
+   - The router extracts current progress, `git status --short`, `git diff --stat`, and touched files.
+   - Saves a report to `.ai_router_reports/<timestamp>_handoff_agy_<profile>.md`.
+4. **Seamless Continuation**: The replacement worker (`worker2`) is launched with the full handoff report injected directly into its prompt, picking up execution without human intervention.
 
 ---
 
