@@ -4,7 +4,7 @@
 
 A local router that classifies engineering requirements and automatically dispatches each sub-task to the most suitable AI Coding Agent CLI:
 
-- **Antigravity** (`agy`) — Frontend/UI (React, Vue, HTML/CSS) and lightweight operational tasks: scanning paths, reading files, `cd`, checking/confirming service status, and small UI fixes. Runs inside a persistent `tmux` session to preserve conversational context.
+- **Antigravity** (`agy`) — Frontend/UI (React, Vue, HTML/CSS) and lightweight operational tasks: scanning paths, reading files, `cd`, checking/confirming service status, and small UI fixes. Runs via CLI print mode with session persistence via `--continue` / `--conversation`.
 - **Codex** (`codex`) — High-speed code generation, unit/integration test authoring, boilerplate scaffolding, database migrations, algorithms, and isolated function refactoring.
 - **Claude Code** (`claude`) — Complex business reasoning: requirements analysis, handoff documentation, task decomposition, system architecture design, and database schema planning.
 
@@ -17,7 +17,7 @@ packaged as the **Universal Skill** `ai-task-router`.
 ## Key Features
 
 - **3-Tier Rule-Based Classification**: Deconstructs user prompts into discrete clauses and maps each to Antigravity, Codex, or Claude Code. Ambiguous or high-complexity clauses default safely to Claude Code.
-- **Persistent Antigravity Execution via tmux**: Each project is assigned a dedicated tmux session, automatically provisioned on demand. Maintains conversational memory and state across multiple sub-tasks.
+- **Direct Antigravity CLI Execution with Resume**: Runs via print mode (`-p`), seamlessly preserving context via `--continue` (or `--conversation <ID>`) when prompting for user confirmation or chaining sub-tasks.
 - **Non-Interactive Codex Runs via `codex exec`**: Fast and secure execution inside a workspace sandbox with automatic error fallback.
 - **Stateful Claude Code Sessions via `--session-id` + `--resume`**: Automatically persists sessions; pauses for human input when necessary and resumes cleanly to conserve token budget.
 - **Intelligent 3-Level Fallback Chain**:
@@ -106,6 +106,8 @@ End users can flexibly enable or disable any of the 3 AI models (`antigravity`, 
 ### 1. Via Command-Line Flags
 - `--disable <agents>`: Disable one or more models (e.g. `--disable codex` or `--disable antigravity,claude`).
 - `--no-agy` / `--no-antigravity`: Quickly disable Antigravity CLI.
+- `--agy-continue`: Continue Antigravity's most recent conversation (`agy --continue`).
+- `--agy-conversation <ID>`: Resume Antigravity session by specific Conversation ID (`agy --conversation <ID>`).
 - `--no-codex`: Quickly disable Codex CLI.
 - `--no-claude`: Quickly disable Claude Code CLI.
 - `--enable <agents>`: Only enable the specified models (e.g. `--enable codex,claude`).

@@ -4,7 +4,7 @@
 
 Router cục bộ giúp phân loại một yêu cầu nghiệp vụ và tự động điều phối từng phần việc tới đúng AI Coding Agent CLI:
 
-- **Antigravity** (`agy`) — Frontend/UI (React, Vue, HTML/CSS) và các thao tác đơn giản: scan path, đọc file, `cd`, kiểm tra/xác nhận trạng thái service, sửa lỗi giao diện nhỏ. Chạy trong `tmux` session sống để duy trì ngữ cảnh.
+- **Antigravity** (`agy`) — Frontend/UI (React, Vue, HTML/CSS) và các thao tác đơn giản: scan path, đọc file, `cd`, kiểm tra/xác nhận trạng thái service, sửa lỗi giao diện nhỏ. Chạy qua CLI print mode với khả năng duy trì ngữ cảnh qua `--continue` / `--conversation`.
 - **Codex** (`codex`) — Code Generation tốc độ cao, viết Unit/Integration Tests, boilerplate, database migrations, thuật toán, refactor hàm chuyên biệt.
 - **Claude Code** (`claude`) — Suy luận nghiệp vụ phức tạp: phân tích yêu cầu, viết tài liệu bàn giao (handoff), phân chia task, thiết kế kiến trúc hệ thống & DB schema.
 
@@ -17,7 +17,7 @@ Toàn bộ logic nằm trong file:
 ## Tính năng chính
 
 - **Phân loại 3-Tier rule-based**: Tách yêu cầu thành nhiều mệnh đề, gán tương ứng cho Antigravity, Codex hoặc Claude Code. Mệnh đề mơ hồ hoặc phức tạp mặc định về Claude Code (an toàn nhất).
-- **Antigravity chạy trong tmux session sống**: Mỗi project được cấp 1 tmux session riêng, tự động khởi tạo nếu chưa có. Giữ ngữ cảnh hội thoại liên tục giữa các sub-task.
+- **Antigravity chạy CLI trực tiếp với Resume**: Thực thi qua print mode (`-p`), tự động tiếp tục ngữ cảnh bằng `--continue` (hoặc `--conversation <ID>`) khi cần hỏi người dùng hoặc tiếp tục task.
 - **Codex chạy non-interactive qua `codex exec`**: Thực thi nhanh chóng, an toàn trong workspace sandbox, tự động fallback nếu lỗi.
 - **Claude Code chạy qua `--session-id` + `--resume`**: Tự động lưu session; khi cần hỏi người dùng sẽ dừng lại và resume phiên để tiết kiệm token.
 - **Tự động Fallback thông minh 3 tầng**:
@@ -106,6 +106,8 @@ Người dùng có thể tuỳ ý tắt bất kỳ Model AI nào trong 3 model (
 ### 1. Qua cờ dòng lệnh (CLI Flags)
 - `--disable <agents>`: Tắt một hoặc nhiều model (ví dụ: `--disable codex` hoặc `--disable antigravity,claude`).
 - `--no-agy` / `--no-antigravity`: Tắt nhanh Antigravity CLI.
+- `--agy-continue`: Tiếp tục phiên hội thoại gần nhất của Antigravity (`agy --continue`).
+- `--agy-conversation <ID>`: Chỉ định Conversation ID cụ thể để Antigravity khôi phục (`agy --conversation <ID>`).
 - `--no-codex`: Tắt nhanh Codex CLI.
 - `--no-claude`: Tắt nhanh Claude Code CLI.
 - `--enable <agents>`: Chỉ bật các model được liệt kê (ví dụ: `--enable codex,claude`).

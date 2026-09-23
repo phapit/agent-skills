@@ -615,11 +615,12 @@ async def print_quota_status(
     print("=" * 55 + "\n")
 
 
-async def run_agent(agent_name: str, cmd_args: list[str]) -> int:
+async def run_agent(agent_name: str, cmd_args: list[str], cwd: str | None = None) -> int:
     print(f"[{agent_name}] Bắt đầu: {' '.join(shlex.quote(a) for a in cmd_args)}")
     try:
         process = await asyncio.create_subprocess_exec(
             *cmd_args,
+            cwd=cwd,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
@@ -656,13 +657,13 @@ async def ask_user(question_text: str) -> str:
         )
 
 
-async def run_claude_agent(prompt: str, question_path: str) -> int:
+async def run_claude_agent(prompt: str, question_path: str, cwd: str = ".") -> int:
     session_id = str(uuid.uuid4())
     extra_args = ["--autocompact", str(CLAUDE_CONTEXT_TOKEN_LIMIT), *claude_system_prompt_args()]
     cmd_args = [CLAUDE_CMD, "--session-id", session_id, *extra_args, "-p", prompt]
 
     while True:
-        exit_code = await run_agent("Claude Code", cmd_args)
+        exit_code = await run_agent("Claude Code", cmd_args, cwd=cwd)
         if not os.path.exists(question_path):
             return exit_code
 
@@ -674,7 +675,7 @@ async def run_claude_agent(prompt: str, question_path: str) -> int:
         cmd_args = [CLAUDE_CMD, "--resume", session_id, *extra_args, "-p", answer]
 
 
-async def run_codex_agent(prompt: str, question_path: str, cwd: str) -> int:
+async def run_codex_agent(prompt: str, question_path: str, cwd: str = ".") -> int:
     full_prompt = prompt + context_rules_directive()
     cmd_args = [
         CODEX_CMD, "exec",
@@ -683,7 +684,7 @@ async def run_codex_agent(prompt: str, question_path: str, cwd: str) -> int:
         full_prompt,
     ]
 
-    exit_code = await run_agent("Codex", cmd_args)
+    exit_code = await run_agent("Codex", cmd_args, cwd=cwd)
 
     if os.path.exists(question_path):
         with open(question_path, "r", encoding="utf-8") as f:
@@ -692,115 +693,12 @@ async def run_codex_agent(prompt: str, question_path: str, cwd: str) -> int:
         answer = await ask_user(question_text)
         resume_prompt = f"Tiếp tục thực hiện với câu trả lời từ người dùng: {answer}\n" + full_prompt
         cmd_args = [CODEX_CMD, "exec", "-C", cwd, "-s", "workspace-write", resume_prompt]
-        exit_code = await run_agent("Codex", cmd_args)
+        exit_code = await run_agent("Codex", cmd_args, cwd=cwd)
 
     return exit_code
 
 
-TMUX_CMD = "tmux"
-AGY_SESSION_PREFIX = "ai_router_agy"
 AGY_USAGE_FALLBACK_THRESHOLD = 90
-AGY_SESSION_READY_TIMEOUT = 30.0
-AGY_TASK_TIMEOUT = 1800.0
-AGY_POLL_INTERVAL = 2.0
-
-
-def agy_session_name(cwd: str) -> str:
-    return f"{AGY_SESSION_PREFIX}_{slugify(os.path.basename(os.path.abspath(cwd)))}"
-
-
-async def tmux_run(*args: str) -> tuple[int, str]:
-    return await run_capture([TMUX_CMD, *args])
-
-
-async def tmux_session_exists(session: str) -> bool:
-    code, _ = await tmux_run("has-session", "-t", session)
-    return code == 0
-
-
-async def tmux_capture(session: str) -> str:
-    code, out = await tmux_run("capture-pane", "-t", session, "-p", "-J")
-    return out if code == 0 else ""
-
-
-async def tmux_send_task(session: str, prompt: str) -> None:
-    single_line = " ".join(prompt.split("\n"))
-    await tmux_run("send-keys", "-t", session, "-l", single_line)
-    await tmux_run("send-keys", "-t", session, "Enter")
-
-
-async def wait_pane_stable(
-    session: str, stable_checks: int = 2, interval: float = 1.5,
-    timeout: float = AGY_SESSION_READY_TIMEOUT,
-) -> None:
-    start = asyncio.get_event_loop().time()
-    last = None
-    stable = 0
-    while asyncio.get_event_loop().time() - start < timeout:
-        current = await tmux_capture(session)
-        if current == last:
-            stable += 1
-            if stable >= stable_checks:
-                return
-        else:
-            stable = 0
-        last = current
-        await asyncio.sleep(interval)
-
-
-async def ensure_agy_session(session: str, cwd: str) -> None:
-    if await tmux_session_exists(session):
-        return
-    code, _ = await tmux_run("new-session", "-d", "-s", session, "-c", cwd, ANTIGRAVITY_CMD)
-    if code != 0:
-        raise RuntimeError(
-            f"Không thể tạo tmux session '{session}' (thiếu tmux hoặc lệnh '{ANTIGRAVITY_CMD}')."
-        )
-    print(f"[Antigravity-tmux] Đã tạo session '{session}', đợi TUI sẵn sàng...")
-    await wait_pane_stable(session)
-
-
-def parse_token_amount(text: str) -> float | None:
-    match = re.match(r"^([\d.]+)\s*([kKmM]?)$", text.strip())
-    if not match:
-        return None
-    amount = float(match.group(1))
-    suffix = match.group(2).lower()
-    if suffix == "k":
-        amount *= 1_000
-    elif suffix == "m":
-        amount *= 1_000_000
-    return amount
-
-
-def parse_agy_context_tokens(pane_text: str) -> int | None:
-    match = re.search(r"·\s*([\d.]+[kKmM]?)\s*/\s*([\d.]+[kKmM]?)", pane_text)
-    if not match:
-        return None
-    used = parse_token_amount(match.group(1))
-    return int(used) if used is not None else None
-
-
-async def check_and_compact_agy_context(session: str) -> None:
-    await tmux_send_task(session, "/context")
-    await asyncio.sleep(1.5)
-    pane = await tmux_capture(session)
-    used_tokens = parse_agy_context_tokens(pane)
-
-    await tmux_run("send-keys", "-t", session, "Escape")
-    await asyncio.sleep(0.3)
-
-    if used_tokens is None:
-        print(f"[Antigravity-tmux] Không đọc được context usage của session '{session}'.")
-        return
-
-    if used_tokens > AGY_CONTEXT_TOKEN_LIMIT:
-        print(
-            f"[Antigravity-tmux] Session '{session}' đang dùng ~{used_tokens} token "
-            f"(> {AGY_CONTEXT_TOKEN_LIMIT}) -> gọi /clear để reset ngữ cảnh."
-        )
-        await tmux_send_task(session, "/clear")
-        await asyncio.sleep(1.0)
 
 
 async def antigravity_usage_exceeded() -> bool:
@@ -811,39 +709,40 @@ async def antigravity_usage_exceeded() -> bool:
     return used_percent > AGY_USAGE_FALLBACK_THRESHOLD
 
 
-async def run_antigravity_agent(prompt: str, question_path: str, marker: str, cwd: str) -> int:
+async def run_antigravity_agent(
+    prompt: str,
+    question_path: str,
+    cwd: str = ".",
+    conversation_id: str | None = None,
+    agy_continue: bool = False,
+) -> int:
     if await antigravity_usage_exceeded():
         print(f"[Router] Antigravity usage > {AGY_USAGE_FALLBACK_THRESHOLD}% (cạn quota 5h).")
         return 99
 
-    session = agy_session_name(cwd)
-    await ensure_agy_session(session, cwd)
-    await check_and_compact_agy_context(session)
+    cmd_args = [ANTIGRAVITY_CMD, "--dangerously-skip-permissions"]
+    if conversation_id:
+        cmd_args.extend(["--conversation", conversation_id])
+    elif agy_continue:
+        cmd_args.append("--continue")
+    cmd_args.extend(["-p", prompt])
 
-    await tmux_send_task(session, prompt)
-    await asyncio.sleep(1.5)
-    baseline_count = (await tmux_capture(session)).count(marker)
+    while True:
+        exit_code = await run_agent("Antigravity", cmd_args, cwd=cwd)
+        if not os.path.exists(question_path):
+            return exit_code
 
-    start = asyncio.get_event_loop().time()
-    while asyncio.get_event_loop().time() - start < AGY_TASK_TIMEOUT:
-        if os.path.exists(question_path):
-            with open(question_path, "r", encoding="utf-8") as f:
-                question_text = f.read()
-            os.remove(question_path)
-            answer = await ask_user(question_text)
-            await tmux_send_task(session, answer)
-            start = asyncio.get_event_loop().time()
-            continue
+        with open(question_path, "r", encoding="utf-8") as f:
+            question_text = f.read()
+        os.remove(question_path)
 
-        pane = await tmux_capture(session)
-        if pane.count(marker) > baseline_count:
-            print(f"[Antigravity-tmux] Phát hiện marker hoàn tất trong session '{session}'.")
-            return 0
-
-        await asyncio.sleep(AGY_POLL_INTERVAL)
-
-    print(f"[Antigravity-tmux] Timeout ({AGY_TASK_TIMEOUT}s) trong session '{session}'.")
-    return 1
+        answer = await ask_user(question_text)
+        cmd_args = [ANTIGRAVITY_CMD, "--dangerously-skip-permissions"]
+        if conversation_id:
+            cmd_args.extend(["--conversation", conversation_id])
+        else:
+            cmd_args.append("--continue")
+        cmd_args.extend(["-p", answer])
 
 
 async def execute_task_with_fallback_chain(
@@ -854,6 +753,8 @@ async def execute_task_with_fallback_chain(
     chains: dict[str, list[str]],
     enabled_agents: dict[str, bool] | None = None,
     lang: str | None = None,
+    agy_conversation: str | None = None,
+    agy_continue: bool = False,
 ) -> int:
     """
     Thực thi một task theo chuỗi fallback cấu hình:
@@ -881,7 +782,6 @@ async def execute_task_with_fallback_chain(
             return 1
 
     base_prompt = build_base_prompt(task, cwd, ctx, is_readonly=False, lang=lang)
-    marker = task_done_marker(ctx["task_id"], lang=lang)
 
     for idx, current_agent in enumerate(execution_chain):
         print(f"\n[Router] [Task: {ctx['task_id']}] -> Đang thực thi bằng '{current_agent.upper()}'...")
@@ -889,16 +789,24 @@ async def execute_task_with_fallback_chain(
 
         try:
             if current_agent == "antigravity":
-                antigravity_prompt = base_prompt + context_rules_directive()
+                antigravity_prompt = (
+                    base_prompt
+                    + context_rules_directive()
+                    + confirmation_directive_text(ctx["question_path"], lang=lang)
+                )
                 exit_code = await run_antigravity_agent(
-                    antigravity_prompt, ctx["question_path"], marker, cwd
+                    antigravity_prompt,
+                    ctx["question_path"],
+                    cwd=cwd,
+                    conversation_id=agy_conversation,
+                    agy_continue=agy_continue,
                 )
             elif current_agent == "codex":
                 codex_prompt = base_prompt + confirmation_directive_text(ctx["question_path"], lang=lang)
-                exit_code = await run_codex_agent(codex_prompt, ctx["question_path"], cwd)
+                exit_code = await run_codex_agent(codex_prompt, ctx["question_path"], cwd=cwd)
             elif current_agent == "claude":
                 claude_prompt = base_prompt + confirmation_directive_text(ctx["question_path"], lang=lang)
-                exit_code = await run_claude_agent(claude_prompt, ctx["question_path"])
+                exit_code = await run_claude_agent(claude_prompt, ctx["question_path"], cwd=cwd)
             else:
                 print(f"[Router ERROR] Không hỗ trợ agent '{current_agent}'.")
                 exit_code = 127
@@ -946,6 +854,8 @@ async def dispatch(
     chains: dict[str, list[str]],
     enabled_agents: dict[str, bool] | None = None,
     overall_lang: str = "vi",
+    agy_conversation: str | None = None,
+    agy_continue: bool = False,
 ) -> None:
     if enabled_agents is None:
         enabled_agents = load_enabled_agents()
@@ -973,7 +883,15 @@ async def dispatch(
             task_lang = detect_language(task)
             concurrent.append(
                 execute_task_with_fallback_chain(
-                    effective_agent, task, cwd, ctx, chains, enabled_agents, lang=task_lang
+                    effective_agent,
+                    task,
+                    cwd,
+                    ctx,
+                    chains,
+                    enabled_agents,
+                    lang=task_lang,
+                    agy_conversation=agy_conversation,
+                    agy_continue=agy_continue,
                 )
             )
 
@@ -1028,6 +946,14 @@ def main() -> None:
     parser.add_argument(
         "--no-agy", "--no-antigravity", dest="disable_agy", action="store_true",
         help="Tắt Antigravity CLI cho lượt chạy này.",
+    )
+    parser.add_argument(
+        "--agy-continue", action="store_true",
+        help="Tiếp tục phiên làm việc gần nhất của Antigravity ('agy --continue').",
+    )
+    parser.add_argument(
+        "--agy-conversation", default=None,
+        help="Khôi phục phiên làm việc của Antigravity theo Conversation ID ('agy --conversation <ID>').",
     )
     parser.add_argument(
         "--no-codex", dest="disable_codex", action="store_true",
@@ -1146,7 +1072,16 @@ def main() -> None:
         chain_label = " -> ".join(t.upper() for t in v) if v else "(Dừng / Không fallback)"
         print(f"  • {k.upper():12} -> {chain_label}")
 
-    asyncio.run(dispatch(tasks_dict, chains, enabled_agents, overall_lang=user_lang))
+    asyncio.run(
+        dispatch(
+            tasks_dict,
+            chains,
+            enabled_agents,
+            overall_lang=user_lang,
+            agy_conversation=args.agy_conversation,
+            agy_continue=args.agy_continue,
+        )
+    )
 
     # Nghiệm thu chất lượng độc lập (Quality Gate - Phương án C)
     if quality_gate:
