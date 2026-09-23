@@ -69,7 +69,42 @@ python3 ai-task-router/classify_and_split_task.py "fix login button styling in R
 
 # Check quota & CLI availability
 python3 ai-task-router/classify_and_split_task.py --check-quota
+
+# Flexibly disable one or more AI Models
+python3 ai-task-router/classify_and_split_task.py --disable codex "your prompt..."
+python3 ai-task-router/classify_and_split_task.py --no-agy "your prompt..."
+python3 ai-task-router/classify_and_split_task.py --enable codex,claude "your prompt..."
 ```
+
+---
+
+## Enabling / Disabling AI Models
+
+End users can flexibly enable or disable any of the 3 AI models (`antigravity`, `codex`, `claude`) in two ways:
+
+### 1. Via Command-Line Flags
+- `--disable <agents>`: Disable one or more models (e.g. `--disable codex` or `--disable antigravity,claude`).
+- `--no-agy` / `--no-antigravity`: Quickly disable Antigravity CLI.
+- `--no-codex`: Quickly disable Codex CLI.
+- `--no-claude`: Quickly disable Claude Code CLI.
+- `--enable <agents>`: Only enable the specified models (e.g. `--enable codex,claude`).
+
+*Dynamic Rerouting:* When a model is disabled:
+- Any sub-task originally designated for it is automatically rerouted to the best available active model (following its fallback chain or alternative capabilities).
+- Disabled models are automatically omitted from all fallback chains.
+
+### 2. Persistent Configuration in `settings.json`
+Edit [`ai-task-router/.agents/settings.json`](ai-task-router/.agents/settings.json):
+```json
+{
+  "enabled_agents": {
+    "antigravity": true,
+    "codex": false,
+    "claude": true
+  }
+}
+```
+Or as a list: `"disabled_agents": ["codex"]`.
 
 ---
 
@@ -79,6 +114,11 @@ Configure context limits and fallback behavior at [`ai-task-router/.agents/setti
 
 ```json
 {
+  "enabled_agents": {
+    "antigravity": true,
+    "codex": true,
+    "claude": true
+  },
   "context": {
     "auto_compact": true,
     "claude_max_token_threshold": 300000,

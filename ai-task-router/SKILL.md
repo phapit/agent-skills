@@ -57,6 +57,23 @@ python3 <path_to_skill>/classify_and_split_task.py "<nguyên văn yêu cầu c�
 python3 <path_to_skill>/classify_and_split_task.py --check-quota
 ```
 
+### C. Tùy ý bật / tắt một hoặc nhiều Model AI
+Người dùng có thể chủ động tắt bất kỳ Model AI nào (ví dụ: cạn quota, chưa cài CLI, hoặc chỉ muốn dùng 1-2 model):
+```bash
+# Tắt một hoặc nhiều model qua cờ --disable
+python3 <path_to_skill>/classify_and_split_task.py --disable codex "<yêu cầu...>"
+python3 <path_to_skill>/classify_and_split_task.py --disable antigravity,claude "<yêu cầu...>"
+
+# Hoặc dùng cờ tắt nhanh
+python3 <path_to_skill>/classify_and_split_task.py --no-codex "<yêu cầu...>"
+python3 <path_to_skill>/classify_and_split_task.py --no-agy "<yêu cầu...>"
+python3 <path_to_skill>/classify_and_split_task.py --no-claude "<yêu cầu...>"
+
+# Hoặc chỉ định rõ danh sách model ĐƯỢC PHÉP dùng qua --enable
+python3 <path_to_skill>/classify_and_split_task.py --enable antigravity,claude "<yêu cầu...>"
+```
+*Ghi chú:* Khi một model bị tắt, các sub-task vốn thuộc về model đó sẽ tự động được router chuyển tiếp sang model khả dụng tốt nhất trong chuỗi fallback. Model bị tắt cũng được tự động loại khỏi mọi chuỗi fallback.
+
 ---
 
 ## 3. Cơ chế vận hành & Báo cáo bàn giao
@@ -79,3 +96,19 @@ Router đọc ngưỡng token từ `.agents/settings.json`:
 - **Claude Code**: 300.000 token (tự động compact qua `--autocompact`).
 - **Antigravity**: 600.000 token (tự động reset qua `/clear` khi đầy).
 - **Codex**: 200.000 token.
+
+---
+
+## 5. Cấu hình Bật / Tắt Model mặc định trong `settings.json`
+
+Để tắt hẳn một Model mà không cần truyền cờ CLI mỗi lần chạy, chỉnh sửa mục `enabled_agents` trong `.agents/settings.json`:
+```json
+{
+  "enabled_agents": {
+    "antigravity": true,
+    "codex": false,
+    "claude": true
+  }
+}
+```
+Hoặc dùng danh sách: `"disabled_agents": ["codex"]`. Router sẽ tự động nạp cấu hình và điều phối task tương ứng.

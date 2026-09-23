@@ -1,5 +1,10 @@
 {
   "_note": "File này KHÔNG được claude/agy tự động nạp (đã kiểm chứng: schema settings.json thật của Claude Code ở ~/.claude/settings.json không có mục context.*, agy không có cờ đọc settings file nào). Dùng làm nguồn cấu hình chung để router (classify_and_split_task.py) hoặc script khác đọc và áp dụng thủ công - xem context-management.md để biết cách wire vào từng CLI.",
+  "enabled_agents": {
+    "antigravity": true,
+    "codex": true,
+    "claude": true
+  },
   "context": {
     "auto_compact": true,
     "claude_max_token_threshold": 300000,

@@ -69,7 +69,42 @@ python3 ai-task-router/classify_and_split_task.py "sửa màu nút login trên U
 
 # Kiểm tra quota & trạng thái của 3 CLI
 python3 ai-task-router/classify_and_split_task.py --check-quota
+
+# Tùy ý tắt 1 hoặc nhiều Model AI khi chạy
+python3 ai-task-router/classify_and_split_task.py --disable codex "yêu cầu..."
+python3 ai-task-router/classify_and_split_task.py --no-agy "yêu cầu..."
+python3 ai-task-router/classify_and_split_task.py --enable codex,claude "yêu cầu..."
 ```
+
+---
+
+## Tùy chọn Bật / Tắt Model AI
+
+Người dùng có thể tuỳ ý tắt bất kỳ Model AI nào trong 3 model (`antigravity`, `codex`, `claude`) theo 2 cách:
+
+### 1. Qua cờ dòng lệnh (CLI Flags)
+- `--disable <agents>`: Tắt một hoặc nhiều model (ví dụ: `--disable codex` hoặc `--disable antigravity,claude`).
+- `--no-agy` / `--no-antigravity`: Tắt nhanh Antigravity CLI.
+- `--no-codex`: Tắt nhanh Codex CLI.
+- `--no-claude`: Tắt nhanh Claude Code CLI.
+- `--enable <agents>`: Chỉ bật các model được liệt kê (ví dụ: `--enable codex,claude`).
+
+*Cơ chế tự động điều phối lại:* Khi một model bị tắt:
+- Các sub-task vốn thuộc về model đó sẽ tự động được chuyển sang model phù hợp nhất tiếp theo (theo chuỗi fallback hoặc năng lực thay thế).
+- Model bị tắt sẽ tự động bị loại bỏ khỏi mọi chuỗi fallback.
+
+### 2. Cấu hình cố định trong `settings.json`
+Chỉnh sửa file [`ai-task-router/.agents/settings.json`](ai-task-router/.agents/settings.json):
+```json
+{
+  "enabled_agents": {
+    "antigravity": true,
+    "codex": false,
+    "claude": true
+  }
+}
+```
+Hoặc dạng danh sách: `"disabled_agents": ["codex"]`.
 
 ---
 
@@ -79,6 +114,11 @@ Cấu hình tại [`ai-task-router/.agents/settings.json`](ai-task-router/.agent
 
 ```json
 {
+  "enabled_agents": {
+    "antigravity": true,
+    "codex": true,
+    "claude": true
+  },
   "context": {
     "auto_compact": true,
     "claude_max_token_threshold": 300000,
