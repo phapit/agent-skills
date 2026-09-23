@@ -170,6 +170,46 @@ You can customize the fallback priority to suit your workflow:
 
 ---
 
+## AI Supervisor & Quality Gate (Approach A + C)
+
+Rather than relying purely on rigid script logic, you can designate an **AI Model to act as a Supervisor (Tech Lead)**:
+- **Approach A (Terminal Control):** Actively monitor tmux terminals running workers (`agy_worker`, `codex_worker`, `claude_worker`), inspect terminal panes, and send keystrokes/confirmations when workers encounter interactive prompts (`[y/N]`).
+- **Approach C (Quality Gate):** Independent verification after workers complete tasks — automatically inspect `git diff` and execute test suites (`pytest`, `npm test`...) to ensure code quality before final handoff.
+
+```bash
+# Designate Claude as Supervisor with Quality Gate
+python3 ai-task-router/classify_and_split_task.py --supervisor claude "your prompt..."
+
+# Designate Antigravity as Supervisor with an isolated profile
+python3 ai-task-router/classify_and_split_task.py --supervisor antigravity --supervisor-profile supervisor "your prompt..."
+
+# Explicitly enable or disable the independent Quality Gate
+python3 ai-task-router/classify_and_split_task.py --quality-gate "your prompt..."
+```
+
+Full directives for the Supervisor AI: [`ai-task-router/SUPERVISOR_SYSTEM_PROMPT.md`](ai-task-router/SUPERVISOR_SYSTEM_PROMPT.md).
+
+---
+
+## Multi-Account Profile Manager
+
+Run multiple independent accounts for Antigravity, Claude, or Codex simultaneously via tmux without token or quota conflicts:
+
+```bash
+# 1. Initialize and log in to a second account for Antigravity (or Claude, Codex)
+python3 ai-task-router/profile_manager.py login antigravity supervisor
+
+# 2. View existing isolated profiles and statuses
+python3 ai-task-router/profile_manager.py status
+
+# 3. Launch an isolated CLI session in tmux
+tmux new-session -s agy_supervisor "python3 ai-task-router/profile_manager.py run antigravity supervisor"
+```
+
+All profile credentials and configurations are stored cleanly under `~/.agents/profiles/`.
+
+---
+
 ## Disclaimer
 
 - This project is an independent open-source orchestration tool and is not officially associated with, maintained by, or endorsed by Anthropic, Google, or OpenAI.

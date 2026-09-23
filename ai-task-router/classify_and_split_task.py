@@ -135,6 +135,20 @@ def load_enabled_agents() -> dict[str, bool]:
 ENABLED_AGENTS = load_enabled_agents()
 
 
+def load_supervisor_config() -> dict:
+    raw = SETTINGS_DATA.get("supervisor", {})
+    return {
+        "enabled": bool(raw.get("enabled", False)),
+        "model": normalize_agent_name(raw.get("model", "claude")),
+        "profile": str(raw.get("profile", "supervisor")),
+        "enable_quality_gate": bool(raw.get("enable_quality_gate", True)),
+        "test_command": str(raw.get("test_command", "auto")),
+    }
+
+
+SUPERVISOR_CONFIG = load_supervisor_config()
+
+
 def load_context_token_limits() -> tuple[int, int, int]:
     ctx = SETTINGS_DATA.get("context", {})
     return (
@@ -1023,6 +1037,22 @@ def main() -> None:
         "--no-claude", dest="disable_claude", action="store_true",
         help="Tắt Claude Code CLI cho lượt chạy này.",
     )
+    parser.add_argument(
+        "--supervisor", default=None,
+        help="Chỉ định Model AI làm Supervisor (ví dụ: '--supervisor claude' hoặc '--supervisor antigravity' hoặc '--supervisor off')",
+    )
+    parser.add_argument(
+        "--supervisor-profile", default=None,
+        help="Tên profile độc lập của Supervisor (mặc định: supervisor)",
+    )
+    parser.add_argument(
+        "--quality-gate", dest="quality_gate", action="store_true",
+        help="Bật cổng nghiệm thu chất lượng độc lập (chạy test & kiểm tra git diff sau khi hoàn tất)",
+    )
+    parser.add_argument(
+        "--no-quality-gate", dest="no_quality_gate", action="store_true",
+        help="Tắt cổng nghiệm thu chất lượng độc lập",
+    )
     args = parser.parse_args()
 
     # 1. Xác định cấu hình bật/tắt Model AI
@@ -1057,7 +1087,29 @@ def main() -> None:
         print("[Router LỖI] Tất cả các Model AI đều bị tắt! Cần kích hoạt ít nhất một Model (antigravity, codex, claude).")
         sys.exit(1)
 
-    # 2. Xác định chuỗi fallback
+    # 2. Cấu hình Supervisor & Quality Gate (Phương án A + C)
+    supervisor_enabled = SUPERVISOR_CONFIG.get("enabled", False)
+    supervisor_model = SUPERVISOR_CONFIG.get("model", "claude")
+    supervisor_profile = SUPERVISOR_CONFIG.get("profile", "supervisor")
+    quality_gate = SUPERVISOR_CONFIG.get("enable_quality_gate", True)
+    test_cmd = SUPERVISOR_CONFIG.get("test_command", "auto")
+
+    if args.supervisor is not None:
+        if args.supervisor.lower() in ("none", "off", "false", "0"):
+            supervisor_enabled = False
+        else:
+            supervisor_enabled = True
+            supervisor_model = normalize_agent_name(args.supervisor)
+
+    if args.supervisor_profile:
+        supervisor_profile = args.supervisor_profile
+
+    if args.quality_gate:
+        quality_gate = True
+    elif args.no_quality_gate:
+        quality_gate = False
+
+    # 3. Xác định chuỗi fallback
     chains = FALLBACK_CHAINS
     if args.fallback:
         chains = parse_fallback_cli_arg(args.fallback)
@@ -1077,6 +1129,11 @@ def main() -> None:
         status_tag = "BẬT (ACTIVE)" if enabled_agents.get(k, True) else "TẮT (DISABLED)"
         print(f"  • {k.upper():12}: {status_tag}")
 
+    if supervisor_enabled:
+        print("[Router] Chế độ AI Supervisor (Phương án A + C): BẬT")
+        print(f"  • Model Supervisor: {supervisor_model.upper()} (Profile: '{supervisor_profile}')")
+        print(f"  • Quality Gate (Nghiệm thu độc lập): {'BẬT' if quality_gate else 'TẮT'}")
+
     print("[Router] Kết quả phân loại sub-tasks:")
     print(json.dumps(tasks_dict, ensure_ascii=False, indent=2))
 
@@ -1090,6 +1147,35 @@ def main() -> None:
         print(f"  • {k.upper():12} -> {chain_label}")
 
     asyncio.run(dispatch(tasks_dict, chains, enabled_agents, overall_lang=user_lang))
+
+    # Nghiệm thu chất lượng độc lập (Quality Gate - Phương án C)
+    if quality_gate:
+        _this_dir = os.path.dirname(os.path.abspath(__file__))
+        if _this_dir not in sys.path:
+            sys.path.insert(0, _this_dir)
+        try:
+            from supervisor_tools import inspect_git_diff, run_verification_tests
+            print("\n" + "=" * 55)
+            print("[Quality Gate] TIẾN HÀNH NGHIỆM THU ĐỘC LẬP (Phương án C)...")
+            print("=" * 55)
+            diff_info = inspect_git_diff(os.getcwd())
+            if diff_info.get("has_changes"):
+                print("[Quality Gate] Thay đổi mã nguồn được ghi nhận:")
+                if diff_info.get("stat"):
+                    print(diff_info["stat"])
+            else:
+                print("[Quality Gate] Không phát hiện thay đổi mã nguồn mới.")
+
+            test_result = run_verification_tests(test_cmd, cwd=os.getcwd())
+            if test_result.get("status") == "SKIPPED":
+                print(f"[Quality Gate] Kiểm thử: {test_result.get('message')}")
+            elif test_result.get("passed"):
+                print(f"[Quality Gate] [PASS] Kiểm thử độc lập THÀNH CÔNG (Exit Code: 0).")
+            else:
+                print(f"[Quality Gate] [FAIL] Kiểm thử độc lập THẤT BẠI (Exit Code: {test_result.get('exit_code')}).")
+            print("=" * 55 + "\n")
+        except ImportError:
+            pass
 
 
 if __name__ == "__main__":

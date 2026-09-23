@@ -130,3 +130,28 @@ Router đọc ngưỡng token từ `.agents/settings.json`:
 }
 ```
 Hoặc dùng danh sách: `"disabled_agents": ["codex"]`. Router sẽ tự động nạp cấu hình và điều phối task tương ứng.
+
+---
+
+## 7. Chế độ AI Supervisor & Quality Gate (Phương án A + C)
+
+Người dùng có thể chỉ định một AI Model làm Tech Lead giám sát terminal worker và nghiệm thu chất lượng:
+```bash
+python3 <path_to_skill>/classify_and_split_task.py --supervisor claude "<yêu cầu...>"
+```
+- **Phương án A (Terminal Control):** Giám sát pane tmux, gỡ kẹt khi worker gặp prompt `[y/N]` bằng `supervisor_tools.py`.
+- **Phương án C (Quality Gate):** Tự động đối chiếu `git diff` và chạy test suite độc lập trước khi bàn giao.
+- Quy tắc điều phối đầy đủ: xem file [`SUPERVISOR_SYSTEM_PROMPT.md`](SUPERVISOR_SYSTEM_PROMPT.md).
+
+---
+
+## 8. Quản lý Đa tài khoản CLI (Profile Manager)
+
+Chạy 2 tài khoản độc lập trên cùng một máy qua `profile_manager.py`:
+```bash
+# Đăng nhập tài khoản thứ 2 cho Antigravity (hoặc claude, codex)
+python3 <path_to_skill>/profile_manager.py login antigravity supervisor
+
+# Kiểm tra trạng thái các profile
+python3 <path_to_skill>/profile_manager.py status
+```

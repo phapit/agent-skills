@@ -41,5 +41,12 @@
     "antigravity": ["claude"],
     "codex": ["claude"],
     "claude": []
+  },
+  "supervisor": {
+    "enabled": false,
+    "model": "claude",
+    "profile": "supervisor",
+    "enable_quality_gate": true,
+    "test_command": "auto"
   }
 }
