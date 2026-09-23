@@ -9,5 +9,6 @@ __pycache__/
 # Agents & Documentation
 AGENTS.md
 docs/
+!docs/*.md
 .agents/*
 !.agents/mcp_config.json
