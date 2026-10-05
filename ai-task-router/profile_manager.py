@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import argparse
 import glob
+import json
 import os
 import re
 import shlex
@@ -174,6 +175,85 @@ def launch_login(agent: str, profile_name: str = "supervisor") -> int:
         return 127
 
 
+_PROFILE_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+
+
+def _dir_size_mb(path: str) -> float:
+    total = 0
+    for root, _, files in os.walk(path):
+        for f in files:
+            fp = os.path.join(root, f)
+            if not os.path.islink(fp):
+                try:
+                    total += os.path.getsize(fp)
+                except OSError:
+                    pass
+    return total / (1024 * 1024)
+
+
+def _profiles_listed_in_settings(agent: str, profile_name: str) -> bool:
+    """True nếu profile còn được liệt kê trong antigravity.profiles của settings.json."""
+    if normalize_agent_name(agent) != "antigravity":
+        return False
+    candidates = [
+        os.path.expanduser("~/.agents/settings.json"),
+        os.path.join(os.path.dirname(os.path.abspath(__file__)), ".agents", "settings.json"),
+    ]
+    for path in candidates:
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+        except (OSError, ValueError):
+            continue
+        profiles = (data.get("antigravity") or {}).get("profiles", [])
+        if isinstance(profiles, list) and profile_name in [str(x).strip() for x in profiles]:
+            return True
+    return False
+
+
+def logout_profile(agent: str, profile_name: str, assume_yes: bool = False) -> int:
+    """
+    Đăng xuất = xóa toàn bộ thư mục profile cô lập (token, keyring, log, cache).
+    Chỉ xóa được thư mục nằm TRỰC TIẾP trong ~/.agents/profiles/; không đụng tài khoản gốc của máy.
+    """
+    norm_agent = normalize_agent_name(agent)
+    if not _PROFILE_NAME_RE.fullmatch(profile_name) or profile_name in ("default",):
+        print(f"[LỖI] Tên profile không hợp lệ hoặc không được phép xóa: {profile_name!r}")
+        return 2
+
+    base = os.path.realpath(DEFAULT_PROFILES_BASE)
+    target = get_profile_dir(norm_agent, profile_name)
+    if os.path.islink(target) or os.path.dirname(os.path.realpath(target)) != base:
+        print(f"[LỖI] Từ chối xóa vì đường dẫn không nằm trực tiếp trong {base}: {target}")
+        return 2
+    if not os.path.isdir(target):
+        print(f"[Thông báo] Profile '{norm_agent}_{profile_name}' không tồn tại, không có gì để xóa.")
+        return 0
+
+    email = get_profile_email(norm_agent, profile_name)
+    print(f"Profile      : {norm_agent}_{profile_name}")
+    print(f"Thư mục      : {target}")
+    print(f"Tài khoản    : {email or '(không xác định)'}")
+    print(f"Dung lượng   : {_dir_size_mb(target):.1f} MB")
+    if _profiles_listed_in_settings(norm_agent, profile_name):
+        print(f"[!] Profile '{profile_name}' vẫn nằm trong antigravity.profiles của settings.json; "
+              f"router sẽ bỏ qua nó (chưa đăng nhập) cho tới khi bạn gỡ tên khỏi danh sách hoặc đăng nhập lại.")
+
+    if not assume_yes:
+        try:
+            answer = input("Xóa vĩnh viễn profile này và đăng xuất? [y/N]: ").strip().lower()
+        except EOFError:
+            answer = ""
+        if answer not in ("y", "yes"):
+            print("Đã hủy, không xóa gì.")
+            return 1
+
+    shutil.rmtree(target)
+    print(f"[OK] Đã xóa profile '{norm_agent}_{profile_name}'. Đăng nhập lại: "
+          f"python3 profile_manager.py login {norm_agent} {profile_name}")
+    return 0
+
+
 def list_profiles_status() -> None:
     print("\n" + "=" * 65)
     print("DANH SÁCH PROFILE ĐỘC LẬP (MULTI-ACCOUNT)")
@@ -238,6 +318,12 @@ def main() -> None:
     login_p.add_argument("agent", choices=["antigravity", "agy", "claude", "codex"], help="Tên Model AI")
     login_p.add_argument("profile", nargs="?", default="supervisor", help="Tên profile (mặc định: supervisor)")
 
+    # logout
+    logout_p = subparsers.add_parser("logout", help="Đăng xuất: xóa toàn bộ thư mục profile cô lập")
+    logout_p.add_argument("agent", choices=["antigravity", "agy", "claude", "codex"], help="Tên Model AI")
+    logout_p.add_argument("profile", help="Tên profile cần xóa")
+    logout_p.add_argument("-y", "--yes", action="store_true", help="Bỏ qua bước xác nhận")
+
     # status
     subparsers.add_parser("status", help="Xem danh sách profile hiện có và trạng thái")
 
@@ -251,6 +337,8 @@ def main() -> None:
 
     if args.command == "login":
         sys.exit(launch_login(args.agent, args.profile))
+    elif args.command == "logout":
+        sys.exit(logout_profile(args.agent, args.profile, assume_yes=args.yes))
     elif args.command == "status":
         list_profiles_status()
     elif args.command == "run":

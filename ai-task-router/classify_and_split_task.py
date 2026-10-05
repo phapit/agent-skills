@@ -147,6 +147,8 @@ def load_supervisor_config() -> dict:
         "profile": str(raw.get("profile", "supervisor")),
         "enable_quality_gate": bool(raw.get("enable_quality_gate", True)),
         "test_command": str(raw.get("test_command", "auto")),
+        "ai_planner": bool(raw.get("ai_planner", True)),
+        "planner_timeout_sec": int(raw.get("planner_timeout_sec", 120)),
     }
 
 
@@ -450,6 +452,15 @@ def classify_and_split_task(
         else:
             raw_assignments.append((clause, "claude"))
 
+    return route_assignments(raw_assignments, enabled_agents, chains)
+
+
+def route_assignments(
+    raw_assignments: list[tuple[str, str]],
+    enabled_agents: dict[str, bool],
+    chains: dict[str, list[str]],
+) -> dict:
+    """Gom các cặp (sub-task, agent) thành dict *_tasks, thay agent đang tắt bằng agent fallback."""
     tasks: dict[str, list[str]] = {
         "antigravity_tasks": [],
         "codex_tasks": [],
@@ -474,6 +485,160 @@ def classify_and_split_task(
         tasks[f"{target_agent}_tasks"].append(clause)
 
     return tasks
+
+
+# ---------------------------------------------------------------------------
+# AI Planner: Supervisor dùng Model AI của profile để tách & chia task.
+# Nếu planner không khả dụng/lỗi, router tự động rơi về phân loại keyword ở trên.
+# ---------------------------------------------------------------------------
+
+PLANNER_MAX_SUBTASKS = 8
+
+PLANNER_PROMPT_TEMPLATE = """Bạn là Tech Lead điều phối nhiều AI coding agent. Hãy TÁCH yêu cầu của người dùng thành các sub-task và GÁN mỗi sub-task cho agent phù hợp nhất. Không thực hiện công việc, không đọc/ghi file, chỉ lập kế hoạch.
+
+Agent khả dụng và thế mạnh:
+{agent_lines}
+
+Quy tắc:
+1. Mỗi sub-task phải TỰ CHỨA (agent chạy song song, không thấy kết quả của nhau): nêu đủ mục tiêu, tên file/đường dẫn/số liệu liên quan bằng đúng nguyên văn trong yêu cầu gốc.
+2. Các bước phụ thuộc nhau (bước sau cần kết quả bước trước) PHẢI gộp thành MỘT sub-task. Chỉ tách những phần độc lập.
+3. Không băm nhỏ quá mức: yêu cầu đơn lẻ thì trả về đúng 1 sub-task. Tối đa {max_subtasks} sub-task.
+4. Giữ nguyên ngôn ngữ của yêu cầu gốc khi viết sub-task. Không bịa thêm yêu cầu ngoài ý người dùng.
+5. Chỉ dùng các agent trong danh sách trên.
+
+Chỉ trả về MỘT đối tượng JSON, không kèm giải thích hay markdown, đúng dạng:
+{{"subtasks": [{{"agent": "<tên agent>", "task": "<nội dung sub-task>"}}]}}
+
+Yêu cầu của người dùng:
+<<<
+{user_prompt}
+>>>"""
+
+PLANNER_AGENT_STRENGTHS = {
+    "antigravity": "Frontend/UI (React, Vue, CSS, HTML), quét/đọc file, kiểm tra service, sửa nhỏ đơn giản.",
+    "codex": "Sinh code/boilerplate, unit test, migration, thuật toán, refactor hàm.",
+    "claude": "Phân tích nghiệp vụ, kiến trúc, backend phức tạp, bảo mật, tài liệu bàn giao, việc mơ hồ hoặc đa bước.",
+}
+
+
+def build_planner_prompt(user_prompt: str, enabled_agents: dict[str, bool]) -> str:
+    agent_lines = "\n".join(
+        f"- {name}: {PLANNER_AGENT_STRENGTHS[name]}"
+        for name in SUPPORTED_AGENTS
+        if enabled_agents.get(name, False)
+    )
+    return PLANNER_PROMPT_TEMPLATE.format(
+        agent_lines=agent_lines,
+        max_subtasks=PLANNER_MAX_SUBTASKS,
+        user_prompt=user_prompt.strip(),
+    )
+
+
+def parse_planner_output(
+    output: str, enabled_agents: dict[str, bool]
+) -> list[tuple[str, str]] | None:
+    """Trích JSON {"subtasks": [...]} từ đầu ra của planner. Trả None nếu không hợp lệ."""
+    decoder = json.JSONDecoder()
+    plan = None
+    for m in re.finditer(r"\{", output):
+        try:
+            obj, _ = decoder.raw_decode(output[m.start():])
+        except ValueError:
+            continue
+        if isinstance(obj, dict) and isinstance(obj.get("subtasks"), list):
+            plan = obj["subtasks"]
+            break
+    if not plan or len(plan) > PLANNER_MAX_SUBTASKS:
+        return None
+
+    assignments: list[tuple[str, str]] = []
+    for item in plan:
+        if not isinstance(item, dict):
+            return None
+        task = item.get("task")
+        agent = normalize_agent_name(item.get("agent", ""))
+        if not isinstance(task, str) or not task.strip() or agent not in SUPPORTED_AGENTS:
+            return None
+        assignments.append((task.strip(), agent))
+    return assignments
+
+
+def resolve_planner_profile(model: str, profile: str) -> tuple[dict | None, bool]:
+    """Trả (env, usable). profile 'default' dùng tài khoản hiện tại của máy (env=None)."""
+    if profile in ("default", "", None):
+        return None, True
+    try:
+        import profile_manager
+    except ImportError:
+        this_dir = os.path.dirname(os.path.abspath(__file__))
+        if this_dir not in sys.path:
+            sys.path.insert(0, this_dir)
+        try:
+            import profile_manager
+        except ImportError:
+            return None, False
+    if not profile_manager.is_profile_initialized(model, profile):
+        return None, False
+    return profile_manager.get_profile_env(model, profile), True
+
+
+def build_planner_cmd(model: str, prompt: str, cwd: str, profile: str, timeout_sec: int) -> list[str]:
+    """Lệnh headless chỉ-suy-luận (không công cụ, không lưu session) cho từng loại agent."""
+    if model == "claude":
+        return [CLAUDE_CMD, "-p", prompt, "--no-session-persistence", "--tools", ""]
+    if model == "codex":
+        return [CODEX_CMD, "exec", "--skip-git-repo-check", "--ephemeral", "-s", "read-only", "-C", cwd, prompt]
+    cmd = [ANTIGRAVITY_CMD, "--print-timeout", f"{timeout_sec}s", "--mode", "plan", "-p", prompt]
+    return wrap_agy_profile_cmd(cmd, profile)
+
+
+async def plan_tasks_with_supervisor(
+    user_prompt: str,
+    model: str,
+    profile: str,
+    enabled_agents: dict[str, bool],
+    chains: dict[str, list[str]],
+    timeout_sec: int = 120,
+) -> dict | None:
+    """Nhờ Model AI của profile supervisor tách & chia task. None nếu thất bại (để rơi về keyword)."""
+    env, usable = resolve_planner_profile(model, profile)
+    if not usable:
+        print(
+            f"[Router] Profile supervisor '{profile}' ({model}) chưa được khởi tạo "
+            f"-> dùng phân loại keyword. Đăng nhập: python3 profile_manager.py login {model} {profile}"
+        )
+        return None
+
+    cwd = os.getcwd()
+    cmd = build_planner_cmd(model, build_planner_prompt(user_prompt, enabled_agents), cwd, profile, timeout_sec)
+    print(f"[Router] Supervisor {model.upper()} (profile '{profile}') đang tách & chia task...")
+    try:
+        process = await asyncio.create_subprocess_exec(
+            *cmd, cwd=cwd, env=env,
+            stdin=asyncio.subprocess.DEVNULL,
+            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=timeout_sec)
+    except FileNotFoundError:
+        print(f"[Router CẢNH BÁO] Không tìm thấy lệnh '{cmd[0]}' -> dùng phân loại keyword.")
+        return None
+    except asyncio.TimeoutError:
+        process.kill()
+        await process.wait()
+        print(f"[Router CẢNH BÁO] Supervisor quá {timeout_sec}s -> dùng phân loại keyword.")
+        return None
+
+    out = stdout.decode("utf-8", errors="replace")
+    if process.returncode != 0:
+        tail = (stderr.decode("utf-8", errors="replace") or out).strip()[-300:]
+        print(f"[Router CẢNH BÁO] Supervisor lỗi (exit {process.returncode}): {tail} -> dùng phân loại keyword.")
+        return None
+
+    assignments = parse_planner_output(out, enabled_agents)
+    if assignments is None:
+        print("[Router CẢNH BÁO] Supervisor trả kế hoạch không hợp lệ -> dùng phân loại keyword.")
+        return None
+    return route_assignments(assignments, enabled_agents, chains)
 
 
 def task_requires_report(task: str, is_readonly: bool) -> bool:
@@ -1352,6 +1517,14 @@ def main() -> None:
         help="Tên profile độc lập của Supervisor (mặc định: supervisor)",
     )
     parser.add_argument(
+        "--no-ai-planner", action="store_true",
+        help="Không dùng Supervisor để tách task; chỉ dùng phân loại keyword cứng.",
+    )
+    parser.add_argument(
+        "--dry-run", action="store_true",
+        help="Chỉ in kế hoạch tách/chia task rồi thoát, không chạy agent.",
+    )
+    parser.add_argument(
         "--quality-gate", dest="quality_gate", action="store_true",
         help="Bật cổng nghiệm thu chất lượng độc lập (chạy test & kiểm tra git diff sau khi hoàn tất)",
     )
@@ -1432,7 +1605,19 @@ def main() -> None:
         parser.error("Thiếu 'prompt' (bỏ qua chỉ khi dùng --check-quota).")
 
     user_lang = detect_language(args.prompt)
-    tasks_dict = classify_and_split_task(args.prompt, enabled_agents, chains)
+    tasks_dict = None
+    if supervisor_enabled and SUPERVISOR_CONFIG["ai_planner"] and not args.no_ai_planner:
+        tasks_dict = asyncio.run(
+            plan_tasks_with_supervisor(
+                args.prompt, supervisor_model, supervisor_profile, enabled_agents, chains,
+                timeout_sec=SUPERVISOR_CONFIG["planner_timeout_sec"],
+            )
+        )
+        planner_used = tasks_dict is not None
+    else:
+        planner_used = False
+    if tasks_dict is None:
+        tasks_dict = classify_and_split_task(args.prompt, enabled_agents, chains)
 
     print("[Router] Trạng thái các Model AI:")
     for k in SUPPORTED_AGENTS:
@@ -1444,8 +1629,11 @@ def main() -> None:
         print(f"  • Model Supervisor: {supervisor_model.upper()} (Profile: '{supervisor_profile}')")
         print(f"  • Quality Gate (Nghiệm thu độc lập): {'BẬT' if quality_gate else 'TẮT'}")
 
-    print("[Router] Kết quả phân loại sub-tasks:")
+    print(f"[Router] Kết quả phân loại sub-tasks ({'AI Supervisor' if planner_used else 'keyword'}):")
     print(json.dumps(tasks_dict, ensure_ascii=False, indent=2))
+
+    if args.dry_run:
+        return
 
     print("[Router] Thứ tự fallback áp dụng cho phiên này:")
     for k in SUPPORTED_AGENTS:

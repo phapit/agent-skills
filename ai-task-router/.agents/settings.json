@@ -51,6 +51,8 @@
     "model": "claude",
     "profile": "supervisor",
     "enable_quality_gate": true,
-    "test_command": "auto"
+    "test_command": "auto",
+    "ai_planner": true,
+    "planner_timeout_sec": 120
   }
 }

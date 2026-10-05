@@ -191,6 +191,20 @@ python3 ai-task-router/classify_and_split_task.py --supervisor antigravity --sup
 python3 ai-task-router/classify_and_split_task.py --quality-gate "yêu cầu..."
 ```
 
+### AI Planner: Supervisor tự tách & chia task
+
+Khi Supervisor được bật, router dùng **Model AI của profile supervisor** để tách yêu cầu thành các sub-task độc lập và gán agent phù hợp, thay cho phân loại keyword cứng (vốn dễ tách sai, ví dụ cắt câu giữa chừng). Mỗi sub-task được viết tự chứa, bước phụ thuộc nhau được gộp lại.
+
+```bash
+# Xem kế hoạch tách/chia mà không chạy agent
+python3 ai-task-router/classify_and_split_task.py --supervisor codex --supervisor-profile default --dry-run "yêu cầu..."
+
+# Ép dùng keyword cứng cho lượt này
+python3 ai-task-router/classify_and_split_task.py --supervisor claude --no-ai-planner "yêu cầu..."
+```
+
+Cấu hình trong `.agents/settings.json` mục `supervisor`: `ai_planner` (mặc định `true`), `planner_timeout_sec` (mặc định `120`). Router tự rơi về keyword khi profile chưa đăng nhập, CLI không có, hết thời gian hoặc kế hoạch sai định dạng. `--supervisor-profile default` dùng tài khoản hiện tại của máy.
+
 Tài liệu chi tiết hướng dẫn Supervisor: [`ai-task-router/SUPERVISOR_SYSTEM_PROMPT.md`](ai-task-router/SUPERVISOR_SYSTEM_PROMPT.md).
 
 ---
@@ -206,7 +220,10 @@ python3 ai-task-router/profile_manager.py login antigravity supervisor
 # 2. Xem danh sách profile hiện có
 python3 ai-task-router/profile_manager.py status
 
-# 3. Khởi chạy CLI trong tmux với profile riêng
+# 3. Đăng xuất / xóa một profile (vd. khi bị cảnh báo trùng tài khoản), có xác nhận y/N
+python3 ai-task-router/profile_manager.py logout antigravity worker2
+
+# 4. Khởi chạy CLI trong tmux với profile riêng
 tmux new-session -s agy_supervisor "python3 ai-task-router/profile_manager.py run antigravity supervisor"
 ```
 

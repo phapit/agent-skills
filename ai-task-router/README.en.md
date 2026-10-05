@@ -191,6 +191,20 @@ python3 ai-task-router/classify_and_split_task.py --supervisor antigravity --sup
 python3 ai-task-router/classify_and_split_task.py --quality-gate "your prompt..."
 ```
 
+### AI Planner: the Supervisor splits and assigns tasks
+
+When the Supervisor is enabled, the router uses the **AI model of the supervisor profile** to split the request into independent sub-tasks and assign each to the best agent, instead of the rigid keyword classifier (which can split sentences incorrectly). Each sub-task is self-contained; dependent steps are merged.
+
+```bash
+# Preview the split/assignment plan without running any agent
+python3 ai-task-router/classify_and_split_task.py --supervisor codex --supervisor-profile default --dry-run "your prompt..."
+
+# Force the keyword classifier for this run
+python3 ai-task-router/classify_and_split_task.py --supervisor claude --no-ai-planner "your prompt..."
+```
+
+Configure under `supervisor` in `.agents/settings.json`: `ai_planner` (default `true`), `planner_timeout_sec` (default `120`). The router falls back to keywords if the profile is not logged in, the CLI is missing, the call times out, or the plan is malformed. `--supervisor-profile default` uses the machine's current account.
+
 Full directives for the Supervisor AI: [`ai-task-router/SUPERVISOR_SYSTEM_PROMPT.md`](ai-task-router/SUPERVISOR_SYSTEM_PROMPT.md).
 
 ---
@@ -206,7 +220,10 @@ python3 ai-task-router/profile_manager.py login antigravity supervisor
 # 2. View existing isolated profiles and statuses
 python3 ai-task-router/profile_manager.py status
 
-# 3. Launch an isolated CLI session in tmux
+# 3. Log out / delete a profile (e.g. on a duplicate-account warning); asks y/N to confirm
+python3 ai-task-router/profile_manager.py logout antigravity worker2
+
+# 4. Launch an isolated CLI session in tmux
 tmux new-session -s agy_supervisor "python3 ai-task-router/profile_manager.py run antigravity supervisor"
 ```
 

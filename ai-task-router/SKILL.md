@@ -141,6 +141,7 @@ python3 <path_to_skill>/classify_and_split_task.py --supervisor claude "<yêu c�
 ```
 - **Phương án A (Terminal Control):** Giám sát pane tmux, gỡ kẹt khi worker gặp prompt `[y/N]` bằng `supervisor_tools.py`.
 - **Phương án C (Quality Gate):** Tự động đối chiếu `git diff` và chạy test suite độc lập trước khi bàn giao.
+- **AI Planner (tách & chia task):** Khi Supervisor bật, Model AI trong profile supervisor sẽ tách yêu cầu thành sub-task và gán agent, thay cho keyword cứng. Planner chạy headless, không công cụ, không lưu session. Nếu profile chưa đăng nhập, CLI không có, quá `planner_timeout_sec` hoặc trả kế hoạch sai định dạng, router tự rơi về phân loại keyword. Tắt bằng `--no-ai-planner` hoặc `"ai_planner": false`; xem trước kế hoạch bằng `--dry-run`; `--supervisor-profile default` dùng tài khoản hiện tại của máy.
 - Quy tắc điều phối đầy đủ: xem file [`SUPERVISOR_SYSTEM_PROMPT.md`](SUPERVISOR_SYSTEM_PROMPT.md).
 
 ---
@@ -154,4 +155,7 @@ python3 <path_to_skill>/profile_manager.py login antigravity supervisor
 
 # Kiểm tra trạng thái các profile
 python3 <path_to_skill>/profile_manager.py status
+
+# Đăng xuất / xóa profile (vd. profile bị trùng tài khoản); có xác nhận y/N, thêm -y để bỏ qua
+python3 <path_to_skill>/profile_manager.py logout antigravity worker2
 ```
