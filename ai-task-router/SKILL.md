@@ -156,6 +156,10 @@ python3 <path_to_skill>/profile_manager.py login antigravity supervisor
 # Kiểm tra trạng thái các profile
 python3 <path_to_skill>/profile_manager.py status
 
+# login/logout tự cập nhật settings.json: profile antigravity khác 'supervisor' được thêm/gỡ khỏi antigravity.profiles;
+# profile 'supervisor' bật/tắt supervisor.enabled. Dùng --no-sync để bỏ qua; `sync` đối chiếu profile đã đăng nhập sẵn.
+python3 <path_to_skill>/profile_manager.py sync
+
 # Đăng xuất / xóa profile (vd. profile bị trùng tài khoản); có xác nhận y/N, thêm -y để bỏ qua
 python3 <path_to_skill>/profile_manager.py logout antigravity worker2
 ```

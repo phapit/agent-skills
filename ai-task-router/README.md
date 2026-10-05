@@ -227,6 +227,8 @@ python3 ai-task-router/profile_manager.py logout antigravity worker2
 tmux new-session -s agy_supervisor "python3 ai-task-router/profile_manager.py run antigravity supervisor"
 ```
 
+**Tự động đồng bộ `settings.json`:** `login` thành công sẽ thêm profile Antigravity vào `antigravity.profiles` (riêng profile `supervisor` thì bật `supervisor.enabled`); `logout` làm ngược lại. Router đọc `~/.agents/settings.json` trước, nên lệnh ghi vào đúng file đó. Dùng `--no-sync` để bỏ qua, hoặc `python3 ai-task-router/profile_manager.py sync` để đối chiếu các profile đã đăng nhập từ trước.
+
 Toàn bộ thông tin tài khoản và cấu hình của profile thứ 2 được cách ly an toàn trong `~/.agents/profiles/`.
 
 ---

@@ -211,7 +211,99 @@ def _profiles_listed_in_settings(agent: str, profile_name: str) -> bool:
     return False
 
 
-def logout_profile(agent: str, profile_name: str, assume_yes: bool = False) -> int:
+SUPERVISOR_PROFILE = "supervisor"
+GLOBAL_AGENTS_DIR = os.path.expanduser("~/.agents")
+REPO_AGENTS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".agents")
+
+
+def resolve_settings_path() -> str:
+    """Cùng thứ tự với router: ~/.agents/settings.json, rồi .agents/ cạnh script; chưa có thì tạo ở global."""
+    for base in (GLOBAL_AGENTS_DIR, REPO_AGENTS_DIR):
+        candidate = os.path.join(base, "settings.json")
+        if os.path.isfile(candidate):
+            return candidate
+    return os.path.join(GLOBAL_AGENTS_DIR, "settings.json")
+
+
+def _mutate_settings(mutator) -> str | None:
+    """Đọc-sửa-ghi settings.json an toàn (ghi nguyên tử). Trả mô tả thay đổi hoặc None nếu không đổi."""
+    path = resolve_settings_path()
+    data: dict = {}
+    if os.path.isfile(path):
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+        except (OSError, ValueError) as e:
+            print(f"[CẢNH BÁO] Không đọc được {path} ({e}) -> KHÔNG tự cập nhật settings.")
+            return None
+        if not isinstance(data, dict):
+            print(f"[CẢNH BÁO] {path} không phải JSON object -> KHÔNG tự cập nhật settings.")
+            return None
+    change = mutator(data)
+    if not change:
+        return None
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+        f.write("\n")
+    if os.path.isfile(path):
+        shutil.copymode(path, tmp)
+    os.replace(tmp, path)
+    return f"{change} ({path})"
+
+
+def sync_settings_after_login(agent: str, profile_name: str) -> None:
+    norm_agent = normalize_agent_name(agent)
+
+    def mutate(data: dict) -> str | None:
+        if profile_name == SUPERVISOR_PROFILE:
+            sup = data.setdefault("supervisor", {})
+            if sup.get("enabled") is True and sup.get("model") == norm_agent and sup.get("profile") == SUPERVISOR_PROFILE:
+                return None
+            sup.update({"enabled": True, "model": norm_agent, "profile": SUPERVISOR_PROFILE})
+            return f"Đã BẬT supervisor (model={norm_agent})"
+        if norm_agent == "antigravity":
+            agy = data.setdefault("antigravity", {})
+            pool = agy.get("profiles")
+            if not isinstance(pool, list):
+                pool = []
+            if profile_name in pool:
+                return None
+            agy["profiles"] = pool + [profile_name]
+            return f"Đã thêm '{profile_name}' vào antigravity.profiles"
+        return None
+
+    msg = _mutate_settings(mutate)
+    if msg:
+        print(f"[Settings] {msg}")
+
+
+def sync_settings_after_logout(agent: str, profile_name: str) -> None:
+    norm_agent = normalize_agent_name(agent)
+
+    def mutate(data: dict) -> str | None:
+        if profile_name == SUPERVISOR_PROFILE:
+            sup = data.get("supervisor")
+            if isinstance(sup, dict) and sup.get("enabled") and sup.get("model") == norm_agent:
+                sup["enabled"] = False
+                return "Đã TẮT supervisor"
+            return None
+        if norm_agent == "antigravity":
+            agy = data.get("antigravity")
+            pool = agy.get("profiles") if isinstance(agy, dict) else None
+            if isinstance(pool, list) and profile_name in pool:
+                agy["profiles"] = [x for x in pool if x != profile_name]
+                note = "" if agy["profiles"] else " (pool rỗng: router sẽ dùng tài khoản agy mặc định của máy)"
+                return f"Đã gỡ '{profile_name}' khỏi antigravity.profiles{note}"
+        return None
+
+    msg = _mutate_settings(mutate)
+    if msg:
+        print(f"[Settings] {msg}")
+
+
+def logout_profile(agent: str, profile_name: str, assume_yes: bool = False, sync: bool = True) -> int:
     """
     Đăng xuất = xóa toàn bộ thư mục profile cô lập (token, keyring, log, cache).
     Chỉ xóa được thư mục nằm TRỰC TIẾP trong ~/.agents/profiles/; không đụng tài khoản gốc của máy.
@@ -228,6 +320,8 @@ def logout_profile(agent: str, profile_name: str, assume_yes: bool = False) -> i
         return 2
     if not os.path.isdir(target):
         print(f"[Thông báo] Profile '{norm_agent}_{profile_name}' không tồn tại, không có gì để xóa.")
+        if sync:
+            sync_settings_after_logout(norm_agent, profile_name)
         return 0
 
     email = get_profile_email(norm_agent, profile_name)
@@ -235,7 +329,7 @@ def logout_profile(agent: str, profile_name: str, assume_yes: bool = False) -> i
     print(f"Thư mục      : {target}")
     print(f"Tài khoản    : {email or '(không xác định)'}")
     print(f"Dung lượng   : {_dir_size_mb(target):.1f} MB")
-    if _profiles_listed_in_settings(norm_agent, profile_name):
+    if not sync and _profiles_listed_in_settings(norm_agent, profile_name):
         print(f"[!] Profile '{profile_name}' vẫn nằm trong antigravity.profiles của settings.json; "
               f"router sẽ bỏ qua nó (chưa đăng nhập) cho tới khi bạn gỡ tên khỏi danh sách hoặc đăng nhập lại.")
 
@@ -249,9 +343,23 @@ def logout_profile(agent: str, profile_name: str, assume_yes: bool = False) -> i
             return 1
 
     shutil.rmtree(target)
+    if sync:
+        sync_settings_after_logout(norm_agent, profile_name)
     print(f"[OK] Đã xóa profile '{norm_agent}_{profile_name}'. Đăng nhập lại: "
           f"python3 profile_manager.py login {norm_agent} {profile_name}")
     return 0
+
+
+def sync_all_profiles() -> None:
+    """Đối chiếu settings.json với các profile đã đăng nhập sẵn (dùng một lần cho profile tạo trước khi có tự động hóa)."""
+    if not os.path.isdir(DEFAULT_PROFILES_BASE):
+        print("(Chưa có profile nào)")
+        return
+    for entry in sorted(os.listdir(DEFAULT_PROFILES_BASE)):
+        agent, _, name = entry.partition("_")
+        if agent in SUPPORTED_AGENTS and name and is_profile_initialized(agent, name):
+            sync_settings_after_login(agent, name)
+    print(f"[Settings] Đã đối chiếu xong: {resolve_settings_path()}")
 
 
 def list_profiles_status() -> None:
@@ -317,12 +425,17 @@ def main() -> None:
     login_p = subparsers.add_parser("login", help="Khởi động CLI để đăng nhập tài khoản cho profile riêng")
     login_p.add_argument("agent", choices=["antigravity", "agy", "claude", "codex"], help="Tên Model AI")
     login_p.add_argument("profile", nargs="?", default="supervisor", help="Tên profile (mặc định: supervisor)")
+    login_p.add_argument("--no-sync", action="store_true", help="Không tự cập nhật settings.json sau khi đăng nhập")
+
+    # sync
+    subparsers.add_parser("sync", help="Đối chiếu settings.json với các profile đã đăng nhập sẵn")
 
     # logout
     logout_p = subparsers.add_parser("logout", help="Đăng xuất: xóa toàn bộ thư mục profile cô lập")
     logout_p.add_argument("agent", choices=["antigravity", "agy", "claude", "codex"], help="Tên Model AI")
     logout_p.add_argument("profile", help="Tên profile cần xóa")
     logout_p.add_argument("-y", "--yes", action="store_true", help="Bỏ qua bước xác nhận")
+    logout_p.add_argument("--no-sync", action="store_true", help="Không tự cập nhật settings.json sau khi xóa")
 
     # status
     subparsers.add_parser("status", help="Xem danh sách profile hiện có và trạng thái")
@@ -336,9 +449,16 @@ def main() -> None:
     args = parser.parse_args()
 
     if args.command == "login":
-        sys.exit(launch_login(args.agent, args.profile))
+        rc = launch_login(args.agent, args.profile)
+        if not args.no_sync and is_profile_initialized(args.agent, args.profile):
+            sync_settings_after_login(args.agent, args.profile)
+        elif not args.no_sync:
+            print("[Settings] Profile chưa đăng nhập xong -> không cập nhật settings.json.")
+        sys.exit(rc)
     elif args.command == "logout":
-        sys.exit(logout_profile(args.agent, args.profile, assume_yes=args.yes))
+        sys.exit(logout_profile(args.agent, args.profile, assume_yes=args.yes, sync=not args.no_sync))
+    elif args.command == "sync":
+        sync_all_profiles()
     elif args.command == "status":
         list_profiles_status()
     elif args.command == "run":

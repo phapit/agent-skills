@@ -227,6 +227,8 @@ python3 ai-task-router/profile_manager.py logout antigravity worker2
 tmux new-session -s agy_supervisor "python3 ai-task-router/profile_manager.py run antigravity supervisor"
 ```
 
+**Automatic `settings.json` sync:** a successful `login` adds the Antigravity profile to `antigravity.profiles` (the `supervisor` profile instead sets `supervisor.enabled`); `logout` reverses it. The router reads `~/.agents/settings.json` first, so the commands write to that file. Use `--no-sync` to skip, or `python3 ai-task-router/profile_manager.py sync` to reconcile already-logged-in profiles.
+
 All profile credentials and configurations are stored cleanly under `~/.agents/profiles/`.
 
 ---
