@@ -9,7 +9,8 @@
    - Chế độ thay thế: `sandbox` (shell chỉ-đọc hoàn toàn), `skip` (không ranh giới, chỉ dùng khi chủ động chấp nhận).
 2. **Quét prompt injection trước khi chạy** (`injection_guard.py` + trường `security_findings` của planner): hiển thị loại, mức độ, ảnh hưởng; người dùng quyết định (`--injection-action`).
 3. **Ràng buộc trong prompt worker** - lớp phụ, không thay thế lớp 1.
-4. **Nghiệm thu độc lập** (Quality Gate) và rà soát `git diff` trước khi nhận kết quả.
+4. **Vai trò kiểm thử (read-only với mã nguồn):** worker `test` chạy với workspace `ro-bind` (Antigravity) và bị đối chiếu ảnh chụp file trước/sau (mọi worker); Claude/Codex chỉ phát hiện được sau khi xong.
+5. **Nghiệm thu độc lập** (Quality Gate) và rà soát `git diff` trước khi nhận kết quả.
 
 ## Rủi ro còn lại (đã biết, chưa loại bỏ được)
 | Rủi ro | Vì sao còn | Giảm thiểu |

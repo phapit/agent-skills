@@ -10,6 +10,29 @@ Kho lưu trữ cá nhân tổng hợp và chia sẻ các kinh nghiệm thực t�
 - **[Repo Map](./repo-map)**: Skill phân tích và tạo bản đồ codebase xếp hạng theo thuật toán PageRank, trích xuất cấu trúc và chữ ký định nghĩa cho Antigravity, Claude Code, Codex, Cursor và Gemini ([repo-map/README.md](./repo-map/README.md)).
 - **Tài liệu & Nghiên cứu**: Các tài liệu thiết kế và báo cáo quy trình ([docs/](./docs)).
 
+## 🧭 Điều phối worker & Báo cáo tổng kết (AI Task Router)
+
+Sau mỗi lần chạy, router in và lưu **báo cáo điều phối** tại `.ai_router_reports/<thời-điểm>_SUMMARY.md` (thư mục này không được đưa lên git), gồm:
+
+1. **Số worker đã sử dụng** (ví dụ `antigravity (worker:tester)`, `claude`, `codex`; tính cả worker được dùng do fallback).
+2. **Công việc của từng worker:** bảng gồm worker, vai trò, sub-task, phụ thuộc, kết quả (`OK` / `FAILED` / `BLOCKED` / `VIOLATION`), thời gian.
+3. **Thứ tự điều phối:** sub-task nào chạy song song, sub-task nào phải chờ sub-task nào.
+4. **Vi phạm vai trò** (nếu có) kèm danh sách file bị sửa.
+
+### Chạy song song và phụ thuộc
+- Sub-task độc lập luôn chạy **song song**.
+- Khi yêu cầu có cả phần sửa mã và phần kiểm thử, Supervisor tách thành hai sub-task: worker 1 vai trò `implement` (sửa mã nguồn) và worker 2 vai trò `test` kèm `depends_on` → **worker 2 chỉ bắt đầu sau khi worker 1 hoàn tất thành công**. Nếu worker 1 thất bại, worker 2 bị đánh dấu `BLOCKED` và không chạy.
+- Worker 2 nhận danh sách việc worker 1 đã làm và được dặn đọc báo cáo bàn giao cùng `git diff`.
+
+### Worker kiểm thử **không được sửa mã nguồn**
+- Chỉ được tạo/sửa file trong `tests/`, `test/`, `__tests__/`, `spec/` hoặc file `test_*.py`, `*_test.*`, `*.test.*`, `*.spec.*`. Nếu test lộ lỗi, worker chỉ **ghi lỗi vào báo cáo**, không tự sửa.
+- Cách thực thi (nhiều lớp): (1) ràng buộc trong prompt; (2) với worker Antigravity, `bwrap` gắn workspace **chỉ-đọc**, chỉ thư mục test và báo cáo ghi được; (3) với mọi worker, router chụp trạng thái mã nguồn trước/sau và đánh dấu `VIOLATION` nếu có file ngoài vùng test bị thay đổi.
+
+### Giới hạn cần biết
+- Vai trò và phụ thuộc do **Supervisor AI** (planner) quyết định; khi planner không dùng được và router rơi về phân loại keyword, mọi sub-task chạy song song, không có vai trò.
+- Với worker Claude/Codex, việc không sửa mã nguồn **chỉ được phát hiện sau khi xong** (không bị chặn cứng như Antigravity); router không tự hoàn tác, bạn xem `git diff` và hoàn tác nếu cần.
+- Hãy kiểm tra kế hoạch chia task (`--dry-run` hiển thị vai trò và phụ thuộc) trước khi chạy việc quan trọng.
+
 ## 🛡️ Bảo mật & Kết quả kiểm thử (AI Task Router)
 
 > **Tóm tắt cho người dùng cuối:** Router đã được rà soát và gia cố bảo mật, nhưng **không có hệ thống nào an toàn tuyệt đối**. Lớp bảo vệ quan trọng nhất vẫn là **bạn đọc kỹ nội dung prompt và các file dự án trước khi giao việc cho Agent**.
@@ -18,7 +41,7 @@ Kho lưu trữ cá nhân tổng hợp và chia sẻ các kinh nghiệm thực t�
 | Hạng mục | Kết quả |
 |---|---|
 | Rà soát bảo mật (Claude, Antigravity; Codex hết quota nên Antigravity làm thay) | Phát hiện và vá F1–F7, N1, N2 (lỗi chèn lệnh qua tên profile, path traversal, quyền thư mục, chạy test bằng shell, lọc ký tự điều khiển, giới hạn đọc file, ẩn báo cáo khỏi git) |
-| Bộ kiểm thử tự động `tests/` | **61 test đạt, 1 bỏ qua** (thăm dò mạng, chỉ chạy khi bật `RUN_NET_PROBE=1`); chạy bằng `python3 -m pytest tests -q` |
+| Bộ kiểm thử tự động `tests/` | **74 test đạt, 1 bỏ qua** (thăm dò mạng, chỉ chạy khi bật `RUN_NET_PROBE=1`); chạy bằng `python3 -m pytest tests -q` |
 | Phát hiện từ kiểm thử đối kháng | 4 lỗi thật (theo symlink, JSON lồng sâu, `npm test` của repo lạ...) đã sửa; chi tiết ở [tests/FINDINGS.md](./tests/FINDINGS.md) |
 | Cô lập worker Antigravity bằng `bwrap` | Kiểm tra thật: ghi trong workspace được; ghi ra hệ thống, HOME, hook git, cấu hình IDE bị chặn; socket D-Bus/docker và thư mục khóa SSH bị che |
 | Quét prompt injection trước khi chạy | Có (hiển thị loại, mức độ, ảnh hưởng; **người dùng quyết định** tiếp tục hay dừng) |

@@ -271,6 +271,10 @@ Trước khi chuyển sang worker mới, Router đảm bảo **ngữ cảnh khô
 
 ---
 
+## Điều phối nhiều worker & báo cáo tổng kết
+
+Router in và lưu `.ai_router_reports/<thời-điểm>_SUMMARY.md`: số worker đã dùng, công việc từng worker, thứ tự điều phối. Planner có thể tách sub-task `implement` (sửa mã) và `test` (chỉ kiểm thử, **không được sửa mã nguồn**) với `depends_on`: worker test chạy sau khi worker sửa mã xong, các sub-task độc lập chạy song song. Chi tiết: mục "Điều phối worker & Báo cáo tổng kết" ở [README gốc](../README.md).
+
 ## Bảo mật & khuyến nghị sử dụng
 
 Router chạy worker Antigravity trong `bwrap`, quét nghi vấn prompt injection trước khi chạy và có bộ test `tests/`. Tuy vậy chưa thể coi là an toàn tuyệt đối: **hãy đọc kỹ prompt và file chỉ dẫn của dự án trước khi giao việc cho Agent.** Kết quả kiểm thử, giới hạn và khuyến nghị đầy đủ: xem mục "Bảo mật & Kết quả kiểm thử" ở [README gốc](../README.md) và [docs/SECURITY_MODEL.md](../docs/SECURITY_MODEL.md).

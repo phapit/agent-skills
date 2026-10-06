@@ -233,3 +233,23 @@ def test_bw14_known_gap_network_not_isolated(sandbox):
         "python3 -c \"import urllib.request;urllib.request.urlopen('https://example.com',timeout=5);print('NET_OK')\""
     )
     assert "NET_OK" in r.stdout  # nếu fail: mạng đã được cô lập -> cập nhật tài liệu rủi ro
+
+
+def test_bw15_test_role_cannot_edit_source_but_can_write_tests(sandbox):
+    """BW-15: worker vai trò test (bwrap thật): không sửa/tạo mã nguồn; ghi được vào tests/ và báo cáo."""
+    import orchestration
+    os.makedirs(os.path.join(sandbox.ws, "src"))
+    open(os.path.join(sandbox.ws, "src", "app.py"), "w").write("x = 1\n")
+    tok = orchestration.CURRENT_ROLE.set("test")
+    try:
+        r1 = sandbox.run("echo 'x = 2' > src/app.py")
+        r2 = sandbox.run("echo new > src/new.py")
+        r3 = sandbox.run("echo 'def test_a(): pass' > tests/test_a.py && mkdir -p .ai_router_reports && echo r > .ai_router_reports/r.md")
+        r4 = sandbox.run("echo evil > setup.py")
+    finally:
+        orchestration.CURRENT_ROLE.reset(tok)
+    assert r1.returncode != 0 and r2.returncode != 0 and r4.returncode != 0
+    assert open(os.path.join(sandbox.ws, "src", "app.py")).read() == "x = 1\n"
+    assert not os.path.exists(os.path.join(sandbox.ws, "src", "new.py"))
+    assert r3.returncode == 0, r3.stderr
+    assert os.path.isfile(os.path.join(sandbox.ws, "tests", "test_a.py"))
