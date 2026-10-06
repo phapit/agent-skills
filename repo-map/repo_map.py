@@ -23,6 +23,8 @@ import subprocess
 from collections import Counter, defaultdict
 from datetime import datetime
 
+MAX_SOURCE_BYTES = 512 * 1024  # ngưỡng đọc tối đa mỗi file nguồn
+
 try:
     from tree_sitter import Language, Parser, Query, QueryCursor
     import tree_sitter_python as _ts_python
@@ -392,8 +394,10 @@ def extract_symbols(files):
     for path in files:
         lang = LANG_EXTS.get(os.path.splitext(path)[1])
         try:
+            if os.path.getsize(path) > MAX_SOURCE_BYTES:
+                continue  # bỏ qua file bundle/minified quá lớn để tránh hết bộ nhớ
             with open(path, "r", encoding="utf-8", errors="ignore") as f:
-                source = f.read()
+                source = f.read(MAX_SOURCE_BYTES)
         except OSError:
             continue
 

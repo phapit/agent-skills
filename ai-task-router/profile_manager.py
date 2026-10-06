@@ -39,9 +39,30 @@ def normalize_agent_name(name: str) -> str:
     return cleaned
 
 
+_SAFE_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+
+
+def validate_profile_name(profile_name: str) -> str:
+    """Chặn path traversal / shell injection: chỉ cho phép tên an toàn, không chứa '..'."""
+    if not isinstance(profile_name, str) or not _SAFE_NAME_RE.fullmatch(profile_name) or ".." in profile_name:
+        raise ValueError(f"Tên profile không hợp lệ: {profile_name!r}")
+    return profile_name
+
+
+def ensure_private_dir(path: str) -> None:
+    """Tạo thư mục với quyền 0700 (chỉ chủ sở hữu); siết quyền cả thư mục đã tồn tại."""
+    os.makedirs(path, mode=0o700, exist_ok=True)
+    try:
+        os.chmod(path, 0o700)
+    except OSError:
+        pass
+
+
 def get_profile_dir(agent: str, profile_name: str = "supervisor") -> str:
     norm_agent = normalize_agent_name(agent)
+    validate_profile_name(profile_name)
     folder_name = f"{norm_agent}_{profile_name}"
+    validate_profile_name(folder_name)
     return os.path.join(DEFAULT_PROFILES_BASE, folder_name)
 
 
@@ -51,7 +72,7 @@ def get_profile_env(agent: str, profile_name: str = "supervisor") -> dict[str, s
     """
     norm_agent = normalize_agent_name(agent)
     profile_dir = get_profile_dir(norm_agent, profile_name)
-    os.makedirs(profile_dir, exist_ok=True)
+    ensure_private_dir(profile_dir)
 
     env = os.environ.copy()
     env["HOME"] = profile_dir
@@ -60,7 +81,7 @@ def get_profile_env(agent: str, profile_name: str = "supervisor") -> dict[str, s
         env["CLAUDE_CONFIG_DIR"] = os.path.join(profile_dir, ".claude")
     elif norm_agent == "codex":
         codex_home = os.path.join(profile_dir, ".codex")
-        os.makedirs(codex_home, exist_ok=True)  # Codex từ chối khởi động nếu CODEX_HOME chưa tồn tại
+        ensure_private_dir(codex_home)  # Codex từ chối khởi động nếu CODEX_HOME chưa tồn tại
         env["CODEX_HOME"] = codex_home
     elif norm_agent == "antigravity":
         env["GEMINI_CLI_HOME"] = os.path.join(profile_dir, ".gemini")
@@ -174,17 +195,22 @@ def wrap_agy_profile_cmd(cmd_args: list[str], profile_name: str) -> list[str]:
     if not shutil.which("dbus-run-session") or not shutil.which("gnome-keyring-daemon"):
         return cmd_args
 
+    validate_profile_name(profile_name)
     norm_name = profile_name if profile_name.startswith("antigravity_") else f"antigravity_{profile_name}"
     profile_dir = os.path.join(DEFAULT_PROFILES_BASE, norm_name)
     keyring_dir = os.path.join(profile_dir, ".keyring")
     share_dir = os.path.join(profile_dir, ".local", "share", "keyrings")
-    os.makedirs(keyring_dir, mode=0o700, exist_ok=True)
-    os.makedirs(share_dir, mode=0o700, exist_ok=True)
+    ensure_private_dir(profile_dir)
+    ensure_private_dir(keyring_dir)
+    ensure_private_dir(share_dir)
 
     quoted_args = " ".join(shlex.quote(a) for a in cmd_args)
+    q_share = shlex.quote(os.path.join(profile_dir, ".local", "share"))
+    q_keyring = shlex.quote(keyring_dir)
+    q_log = shlex.quote(os.path.join(profile_dir, ".keyring.log"))
     shell_cmd = (
-        f'export XDG_DATA_HOME="{profile_dir}/.local/share"; '
-        f'eval $(gnome-keyring-daemon --start --components=secrets --control-directory="{keyring_dir}" 2>>"{profile_dir}/.keyring.log"); '
+        f'export XDG_DATA_HOME={q_share}; '
+        f'eval $(gnome-keyring-daemon --start --components=secrets --control-directory={q_keyring} 2>>{q_log}); '
         f'exec {quoted_args}'
     )
     return ["dbus-run-session", "--", "sh", "-c", shell_cmd]
@@ -210,7 +236,7 @@ def launch_login(agent: str, profile_name: str = "supervisor", force: bool = Fal
             return ALREADY_LOGGED_IN
     cmd = AGENT_CMDS.get(norm_agent, norm_agent)
     profile_dir = get_profile_dir(norm_agent, profile_name)
-    os.makedirs(profile_dir, exist_ok=True)
+    ensure_private_dir(profile_dir)
 
     print("=" * 60)
     print(f"  KHỞI TẠO ĐĂNG NHẬP CHO PROFILE: {norm_agent.upper()} ({profile_name})")
@@ -420,7 +446,7 @@ def list_profiles_status() -> None:
     print("\n" + "=" * 65)
     print("DANH SÁCH PROFILE ĐỘC LẬP (MULTI-ACCOUNT)")
     print("=" * 65)
-    os.makedirs(DEFAULT_PROFILES_BASE, exist_ok=True)
+    ensure_private_dir(DEFAULT_PROFILES_BASE)
     profiles = sorted(os.listdir(DEFAULT_PROFILES_BASE))
     if not profiles:
         print("  (Chưa có profile nào được khởi tạo trong ~/.agents/profiles/)")

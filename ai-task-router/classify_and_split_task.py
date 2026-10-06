@@ -168,23 +168,70 @@ SUPERVISOR_CONFIG = load_supervisor_config()
 DEFAULT_PROFILES_BASE = os.path.expanduser("~/.agents/profiles")
 
 
+def agy_permission_args() -> list[str]:
+    """
+    Cờ quyền cho worker Antigravity. Đã kiểm chứng với agy 1.3.0 (headless -p không thể hỏi quyền):
+    - "sandbox" (mặc định): --sandbox --dangerously-skip-permissions. Tool sửa file tự duyệt, nhưng lệnh shell
+      chạy trong sandbox chỉ-đọc (ghi ngoài workspace và cả shell-ghi trong workspace bị chặn: 'Read-only file system').
+    - "skip": --dangerously-skip-permissions (duyệt tất cả, shell ghi được, KHÔNG có ranh giới) - chỉ bật khi cần
+      chạy test/build ghi file.
+    Lưu ý: --mode accept-edits hoặc --sandbox đứng riêng KHÔNG tự duyệt lệnh shell -> bị auto-deny trong headless.
+    Cấu hình: settings.json -> antigravity.permission_mode.
+    """
+    raw = SETTINGS_DATA.get("antigravity", {})
+    mode = str(raw.get("permission_mode", "sandbox")).lower() if isinstance(raw, dict) else "sandbox"
+    if mode == "skip":
+        return ["--dangerously-skip-permissions"]
+    return ["--sandbox", "--dangerously-skip-permissions"]
+
+
+def _valid_profile_names(names: list[str]) -> list[str]:
+    ok = []
+    for n in names:
+        try:
+            ok.append(validate_profile_name(n) if n != "default" else n)
+        except ValueError:
+            print(f"[Router CẢNH BÁO] Bỏ qua tên profile không hợp lệ trong settings: {n!r}")
+    return ok
+
+
 def load_antigravity_profiles() -> list[str]:
     raw_agy = SETTINGS_DATA.get("antigravity", {})
     if isinstance(raw_agy, dict) and "profiles" in raw_agy:
         profiles = raw_agy.get("profiles", [])
         if isinstance(profiles, list) and profiles:
-            return [str(p).strip() for p in profiles if str(p).strip()]
+            return _valid_profile_names([str(p).strip() for p in profiles if str(p).strip()]) or ["default"]
 
     raw_profiles = SETTINGS_DATA.get("antigravity_profiles")
     if isinstance(raw_profiles, list) and raw_profiles:
-        return [str(p).strip() for p in raw_profiles if str(p).strip()]
+        return _valid_profile_names([str(p).strip() for p in raw_profiles if str(p).strip()]) or ["default"]
 
     return ["default"]
+
+
+_SAFE_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+
+
+def validate_profile_name(profile_name: str) -> str:
+    """Chặn path traversal / shell injection: chỉ cho phép tên an toàn, không chứa '..'."""
+    if not isinstance(profile_name, str) or not _SAFE_NAME_RE.fullmatch(profile_name) or ".." in profile_name:
+        raise ValueError(f"Tên profile không hợp lệ: {profile_name!r}")
+    return profile_name
+
+
+def ensure_private_dir(path: str) -> None:
+    """Tạo thư mục với quyền 0700 (chỉ chủ sở hữu); siết quyền cả thư mục đã tồn tại."""
+    os.makedirs(path, mode=0o700, exist_ok=True)
+    try:
+        os.chmod(path, 0o700)
+    except OSError:
+        pass
 
 
 def get_agy_profile_env(profile_name: str) -> dict[str, str] | None:
     if profile_name in ("default", "", None):
         return None
+    validate_profile_name(profile_name)
     norm_name = profile_name
     if not norm_name.startswith("antigravity_"):
         folder_name = f"antigravity_{norm_name}"
@@ -192,7 +239,7 @@ def get_agy_profile_env(profile_name: str) -> dict[str, str] | None:
         folder_name = norm_name
 
     profile_dir = os.path.join(DEFAULT_PROFILES_BASE, folder_name)
-    os.makedirs(profile_dir, exist_ok=True)
+    ensure_private_dir(profile_dir)
     env = os.environ.copy()
     env["HOME"] = profile_dir
     env["GEMINI_CLI_HOME"] = os.path.join(profile_dir, ".gemini")
@@ -216,6 +263,10 @@ def get_agy_profile_email(profile_name: str) -> str | None:
     if profile_name in ("default", "", None):
         log_dir = os.path.expanduser("~/.gemini/antigravity-cli/log")
     else:
+        try:
+            validate_profile_name(profile_name)
+        except ValueError:
+            return None
         norm_name = profile_name if profile_name.startswith("antigravity_") else f"antigravity_{profile_name}"
         log_dir = os.path.join(DEFAULT_PROFILES_BASE, norm_name, ".gemini", "antigravity-cli", "log")
 
@@ -240,6 +291,10 @@ def get_agy_profile_email(profile_name: str) -> str | None:
 def is_agy_profile_ready(profile_name: str) -> bool:
     if profile_name in ("default", "", None):
         return True
+    try:
+        validate_profile_name(profile_name)
+    except ValueError:
+        return False
     norm_name = profile_name
     if not norm_name.startswith("antigravity_"):
         folder_name = f"antigravity_{norm_name}"
@@ -263,17 +318,22 @@ def wrap_agy_profile_cmd(cmd_args: list[str], profile_name: str | None) -> list[
     if not shutil.which("dbus-run-session") or not shutil.which("gnome-keyring-daemon"):
         return cmd_args
 
+    validate_profile_name(profile_name)
     norm_name = profile_name if profile_name.startswith("antigravity_") else f"antigravity_{profile_name}"
     profile_dir = os.path.join(DEFAULT_PROFILES_BASE, norm_name)
     keyring_dir = os.path.join(profile_dir, ".keyring")
     share_dir = os.path.join(profile_dir, ".local", "share", "keyrings")
-    os.makedirs(keyring_dir, mode=0o700, exist_ok=True)
-    os.makedirs(share_dir, mode=0o700, exist_ok=True)
+    ensure_private_dir(profile_dir)
+    ensure_private_dir(keyring_dir)
+    ensure_private_dir(share_dir)
 
     quoted_args = " ".join(shlex.quote(a) for a in cmd_args)
+    q_share = shlex.quote(os.path.join(profile_dir, ".local", "share"))
+    q_keyring = shlex.quote(keyring_dir)
+    q_log = shlex.quote(os.path.join(profile_dir, ".keyring.log"))
     shell_cmd = (
-        f'export XDG_DATA_HOME="{profile_dir}/.local/share"; '
-        f'eval $(gnome-keyring-daemon --start --components=secrets --control-directory="{keyring_dir}" 2>>"{profile_dir}/.keyring.log"); '
+        f'export XDG_DATA_HOME={q_share}; '
+        f'eval $(gnome-keyring-daemon --start --components=secrets --control-directory={q_keyring} 2>>{q_log}); '
         f'exec {quoted_args}'
     )
     return ["dbus-run-session", "--", "sh", "-c", shell_cmd]
@@ -666,7 +726,7 @@ def slugify(text: str, max_len: int = 40) -> str:
 
 def reports_dir(cwd: str) -> str:
     path = os.path.join(cwd, REPORTS_DIR_NAME)
-    os.makedirs(path, exist_ok=True)
+    ensure_private_dir(path)  # báo cáo audit chứa chi tiết lỗ hổng -> chỉ chủ sở hữu được đọc
     return path
 
 
@@ -948,6 +1008,15 @@ async def print_quota_status(
     print("=" * 55 + "\n")
 
 
+_ANSI_RE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b[@-Z\\-_]")
+_CTRL_RE = re.compile(r"[\x00-\x08\x0b-\x1f\x7f]")
+
+
+def sanitize_terminal_text(text: str) -> str:
+    """Loại ANSI escape và ký tự điều khiển (giữ \\n, \\t) để output worker không thao túng terminal."""
+    return _CTRL_RE.sub("", _ANSI_RE.sub("", text))
+
+
 async def run_agent(
     agent_name: str,
     cmd_args: list[str],
@@ -973,7 +1042,7 @@ async def run_agent(
             line = await stream.readline()
             if not line:
                 break
-            decoded = line.decode('utf-8', errors='replace').rstrip()
+            decoded = sanitize_terminal_text(line.decode('utf-8', errors='replace')).rstrip()
             if output_collector is not None:
                 output_collector.append(decoded)
             print(f"[{prefix}] {decoded}")
@@ -993,7 +1062,7 @@ CONFIRMATION_LOCK = asyncio.Lock()
 async def ask_user(question_text: str) -> str:
     async with CONFIRMATION_LOCK:
         print("\n" + "=" * 50)
-        print(f"[Router] Cần xác nhận trước khi agent tiếp tục:\n{question_text}")
+        print(f"[Router] Cần xác nhận trước khi agent tiếp tục:\n{sanitize_terminal_text(question_text)}")
         print("=" * 50)
         return await asyncio.get_event_loop().run_in_executor(
             None, input, "[Router] Nhập câu trả lời rồi Enter: "
@@ -1110,7 +1179,7 @@ async def ensure_worker_handoff_report(
                 "- Các việc còn lại cần làm tiếp\n"
                 "- Danh sách các file đã tạo hoặc sửa đổi\n"
             )
-            cmd_args = [ANTIGRAVITY_CMD, "--continue", "--dangerously-skip-permissions", "-p", handoff_prompt]
+            cmd_args = [ANTIGRAVITY_CMD, "--continue", *agy_permission_args(), "-p", handoff_prompt]
             code = await run_agent(f"Antigravity ({worker_name}) [Handoff]", cmd_args, cwd=cwd, env=env)
             if code == 0 and os.path.isfile(report_path):
                 with open(report_path, "r", encoding="utf-8") as f:
@@ -1159,6 +1228,7 @@ async def ensure_worker_handoff_report(
             os.makedirs(os.path.dirname(os.path.abspath(report_path)), exist_ok=True)
             with open(report_path, "w", encoding="utf-8") as f:
                 f.write(synthesized_content)
+            os.chmod(report_path, 0o600)
             print(f"[Router Handoff] Đã tạo thành công báo cáo bàn giao tại: {report_path}")
         except OSError as e:
             print(f"[Router Handoff CẢNH BÁO] Không ghi được file {report_path}: {e}")
@@ -1205,7 +1275,7 @@ async def run_antigravity_agent(
                 return 99
 
         print(f"\n[Antigravity Pool] >>> Bắt đầu xử lý bởi [{worker_label.upper()}] <<<")
-        cmd_args = [ANTIGRAVITY_CMD, "--dangerously-skip-permissions"]
+        cmd_args = [ANTIGRAVITY_CMD, *agy_permission_args()]
         if conversation_id:
             cmd_args.extend(["--conversation", conversation_id])
         elif agy_continue:
@@ -1242,7 +1312,7 @@ async def run_antigravity_agent(
             os.remove(question_path)
 
             answer = await ask_user(question_text)
-            cmd_args = [ANTIGRAVITY_CMD, "--dangerously-skip-permissions"]
+            cmd_args = [ANTIGRAVITY_CMD, *agy_permission_args()]
             if conversation_id:
                 cmd_args.extend(["--conversation", conversation_id])
             else:

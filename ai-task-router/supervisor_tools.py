@@ -11,6 +11,7 @@ import argparse
 import json
 import os
 import re
+import shlex
 import subprocess
 import sys
 
@@ -153,6 +154,7 @@ def run_verification_tests(test_command: str = "auto", cwd: str = ".") -> dict:
     Worker báo xong không có nghĩa là code chạy đúng -> Supervisor bắt buộc phải test lại.
     """
     cmd_to_run = test_command
+    use_shell = True  # lệnh do người dùng/settings.json tin cậy chỉ định: cho phép &&, pipe...
     if test_command in ("auto", "", None):
         detected = detect_test_command(cwd)
         if not detected:
@@ -162,13 +164,15 @@ def run_verification_tests(test_command: str = "auto", cwd: str = ".") -> dict:
                 "passed": True,
             }
         cmd_to_run = detected
+        use_shell = False  # lệnh tự phát hiện từ repo: không qua shell
 
     print(f"[Quality Gate] Đang thực thi lệnh test: {cmd_to_run}")
     try:
+        # Không dùng shell=True. Lệnh tự phát hiện từ repo chạy dạng exec; lệnh người dùng chỉ định chạy qua sh -c.
         proc = subprocess.run(
-            cmd_to_run,
+            ["sh", "-c", cmd_to_run] if use_shell else shlex.split(cmd_to_run),
             cwd=cwd,
-            shell=True,
+            shell=False,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,

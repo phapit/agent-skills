@@ -13,3 +13,5 @@ docs/*
 !docs/*.md
 .agents/*
 !.agents/mcp_config.json
+# Báo cáo bàn giao/audit của AI router (có thể chứa chi tiết lỗ hổng)
+.ai_router_reports/
