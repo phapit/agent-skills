@@ -168,21 +168,59 @@ SUPERVISOR_CONFIG = load_supervisor_config()
 DEFAULT_PROFILES_BASE = os.path.expanduser("~/.agents/profiles")
 
 
+_BWRAP_SECRET_DIRS = (".ssh", ".aws", ".gnupg", ".kube", ".docker", ".config/gcloud")
+
+
+def agy_permission_mode() -> str:
+    raw = SETTINGS_DATA.get("antigravity", {})
+    mode = str(raw.get("permission_mode", "bwrap")).lower() if isinstance(raw, dict) else "bwrap"
+    if mode == "bwrap" and not shutil.which("bwrap"):
+        print("[Router CẢNH BÁO] Không có 'bwrap' -> dùng chế độ 'sandbox' của agy (shell chỉ-đọc).")
+        return "sandbox"
+    return mode if mode in ("bwrap", "sandbox", "skip") else "sandbox"
+
+
 def agy_permission_args() -> list[str]:
     """
-    Cờ quyền cho worker Antigravity. Đã kiểm chứng với agy 1.3.0 (headless -p không thể hỏi quyền):
-    - "sandbox" (mặc định): --sandbox --dangerously-skip-permissions. Tool sửa file tự duyệt, nhưng lệnh shell
-      chạy trong sandbox chỉ-đọc (ghi ngoài workspace và cả shell-ghi trong workspace bị chặn: 'Read-only file system').
-    - "skip": --dangerously-skip-permissions (duyệt tất cả, shell ghi được, KHÔNG có ranh giới) - chỉ bật khi cần
-      chạy test/build ghi file.
-    Lưu ý: --mode accept-edits hoặc --sandbox đứng riêng KHÔNG tự duyệt lệnh shell -> bị auto-deny trong headless.
-    Cấu hình: settings.json -> antigravity.permission_mode.
+    Cờ quyền cho worker Antigravity (headless -p không thể hỏi quyền; đã kiểm chứng với agy 1.3.0).
+    settings.json -> antigravity.permission_mode:
+    - "bwrap" (mặc định): --dangerously-skip-permissions nhưng agy chạy trong bubblewrap (xem confine_agy_cmd):
+      toàn quyền trong workspace, phần còn lại của máy chỉ-đọc, thư mục bí mật bị che.
+    - "sandbox": --sandbox --dangerously-skip-permissions (shell chỉ-đọc hoàn toàn, chỉ tool sửa file ghi được).
+    - "skip": --dangerously-skip-permissions không ranh giới - chỉ bật khi người dùng chủ động.
     """
-    raw = SETTINGS_DATA.get("antigravity", {})
-    mode = str(raw.get("permission_mode", "sandbox")).lower() if isinstance(raw, dict) else "sandbox"
-    if mode == "skip":
-        return ["--dangerously-skip-permissions"]
-    return ["--sandbox", "--dangerously-skip-permissions"]
+    if agy_permission_mode() == "sandbox":
+        return ["--sandbox", "--dangerously-skip-permissions"]
+    return ["--dangerously-skip-permissions"]
+
+
+def confine_agy_cmd(cmd_args: list[str], cwd: str | None, env: dict | None) -> list[str]:
+    """Bọc lệnh agy bằng bwrap: ro-bind toàn hệ thống, chỉ workspace + HOME của profile được ghi."""
+    if agy_permission_mode() != "bwrap":
+        return cmd_args
+    workspace = os.path.abspath(cwd or os.getcwd())
+    real_home = os.path.expanduser("~")
+    agy_home = os.path.abspath((env or {}).get("HOME") or real_home)
+    bw = ["bwrap", "--ro-bind", "/", "/", "--dev", "/dev", "--proc", "/proc", "--tmpfs", "/tmp"]
+    # Che thư mục bí mật và token của các profile khác (chỉ khi tồn tại; tmpfs lên đường dẫn không có sẽ lỗi)
+    for rel in _BWRAP_SECRET_DIRS:
+        d = os.path.join(real_home, rel)
+        if os.path.isdir(d):
+            bw += ["--tmpfs", d]
+    if os.path.isdir(DEFAULT_PROFILES_BASE):
+        bw += ["--tmpfs", DEFAULT_PROFILES_BASE]
+    writable = [workspace]
+    if agy_home != real_home:
+        os.makedirs(agy_home, exist_ok=True)
+        writable.append(agy_home)
+    else:
+        gem = os.path.join(real_home, ".gemini")
+        os.makedirs(gem, exist_ok=True)
+        writable.append(gem)
+    for w in dict.fromkeys(writable):
+        bw += ["--bind", w, w]
+    bw += ["--die-with-parent", "--chdir", workspace, "--"]
+    return bw + cmd_args
 
 
 def _valid_profile_names(names: list[str]) -> list[str]:
@@ -1180,7 +1218,7 @@ async def ensure_worker_handoff_report(
                 "- Danh sách các file đã tạo hoặc sửa đổi\n"
             )
             cmd_args = [ANTIGRAVITY_CMD, "--continue", *agy_permission_args(), "-p", handoff_prompt]
-            code = await run_agent(f"Antigravity ({worker_name}) [Handoff]", cmd_args, cwd=cwd, env=env)
+            code = await run_agent(f"Antigravity ({worker_name}) [Handoff]", confine_agy_cmd(cmd_args, cwd, env), cwd=cwd, env=env)
             if code == 0 and os.path.isfile(report_path):
                 with open(report_path, "r", encoding="utf-8") as f:
                     content = f.read().strip()
@@ -1285,7 +1323,7 @@ async def run_antigravity_agent(
         worker_exhausted = False
         while True:
             captured_lines: list[str] = []
-            wrapped_cmd_args = wrap_agy_profile_cmd(cmd_args, worker_name)
+            wrapped_cmd_args = confine_agy_cmd(wrap_agy_profile_cmd(cmd_args, worker_name), cwd, worker_env)
             exit_code = await run_agent(
                 f"Antigravity [{worker_label}]",
                 wrapped_cmd_args,
