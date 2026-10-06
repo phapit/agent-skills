@@ -140,17 +140,30 @@ def wrap_agy_profile_cmd(cmd_args: list[str], profile_name: str) -> list[str]:
     quoted_args = " ".join(shlex.quote(a) for a in cmd_args)
     shell_cmd = (
         f'export XDG_DATA_HOME="{profile_dir}/.local/share"; '
-        f'eval $(gnome-keyring-daemon --start --components=secrets --control-directory="{keyring_dir}"); '
+        f'eval $(gnome-keyring-daemon --start --components=secrets --control-directory="{keyring_dir}" 2>>"{profile_dir}/.keyring.log"); '
         f'exec {quoted_args}'
     )
     return ["dbus-run-session", "--", "sh", "-c", shell_cmd]
 
 
-def launch_login(agent: str, profile_name: str = "supervisor") -> int:
+def launch_login(agent: str, profile_name: str = "supervisor", force: bool = False) -> int:
     """
     Khởi động CLI trong môi trường profile độc lập để người dùng xác thực tài khoản thứ 2.
+    Nếu profile đã đăng nhập sẵn thì báo rõ và hỏi xác nhận (trừ khi force=True).
     """
     norm_agent = normalize_agent_name(agent)
+    if not force and is_profile_initialized(norm_agent, profile_name):
+        email = get_profile_email(norm_agent, profile_name)
+        who = f" ({email})" if email else ""
+        print(f"Profile '{norm_agent}_{profile_name}' đã đăng nhập{who}.")
+        print(f"Muốn đổi tài khoản: logout {norm_agent} {profile_name} rồi login lại.")
+        try:
+            answer = input("Vẫn mở CLI trong profile này? [y/N]: ").strip().lower()
+        except EOFError:
+            answer = ""
+        if answer not in ("y", "yes"):
+            print("Đã hủy, không mở CLI.")
+            return ALREADY_LOGGED_IN
     cmd = AGENT_CMDS.get(norm_agent, norm_agent)
     profile_dir = get_profile_dir(norm_agent, profile_name)
     os.makedirs(profile_dir, exist_ok=True)
@@ -212,6 +225,7 @@ def _profiles_listed_in_settings(agent: str, profile_name: str) -> bool:
 
 
 SUPERVISOR_PROFILE = "supervisor"
+ALREADY_LOGGED_IN = -1  # launch_login bị hủy vì profile đã đăng nhập
 GLOBAL_AGENTS_DIR = os.path.expanduser("~/.agents")
 REPO_AGENTS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".agents")
 
@@ -425,6 +439,7 @@ def main() -> None:
     login_p = subparsers.add_parser("login", help="Khởi động CLI để đăng nhập tài khoản cho profile riêng")
     login_p.add_argument("agent", choices=["antigravity", "agy", "claude", "codex"], help="Tên Model AI")
     login_p.add_argument("profile", nargs="?", default="supervisor", help="Tên profile (mặc định: supervisor)")
+    login_p.add_argument("--force", action="store_true", help="Không hỏi xác nhận khi profile đã đăng nhập sẵn")
     login_p.add_argument("--no-sync", action="store_true", help="Không tự cập nhật settings.json sau khi đăng nhập")
 
     # sync
@@ -449,7 +464,9 @@ def main() -> None:
     args = parser.parse_args()
 
     if args.command == "login":
-        rc = launch_login(args.agent, args.profile)
+        rc = launch_login(args.agent, args.profile, force=args.force)
+        if rc == ALREADY_LOGGED_IN:
+            sys.exit(0)
         if not args.no_sync and is_profile_initialized(args.agent, args.profile):
             sync_settings_after_login(args.agent, args.profile)
         elif not args.no_sync:

@@ -262,7 +262,7 @@ def wrap_agy_profile_cmd(cmd_args: list[str], profile_name: str | None) -> list[
     quoted_args = " ".join(shlex.quote(a) for a in cmd_args)
     shell_cmd = (
         f'export XDG_DATA_HOME="{profile_dir}/.local/share"; '
-        f'eval $(gnome-keyring-daemon --start --components=secrets --control-directory="{keyring_dir}"); '
+        f'eval $(gnome-keyring-daemon --start --components=secrets --control-directory="{keyring_dir}" 2>>"{profile_dir}/.keyring.log"); '
         f'exec {quoted_args}'
     )
     return ["dbus-run-session", "--", "sh", "-c", shell_cmd]
