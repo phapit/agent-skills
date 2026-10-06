@@ -83,14 +83,25 @@ DEFAULT_FALLBACK_CHAINS = {
 }
 
 
+def _deep_merge(base: dict, override: dict) -> dict:
+    """Gộp đệ quy: khóa nào có trong override thì thắng; dict lồng nhau được gộp, list/giá trị thì thay hẳn."""
+    for key, value in override.items():
+        if isinstance(value, dict) and isinstance(base.get(key), dict):
+            _deep_merge(base[key], value)
+        else:
+            base[key] = value
+    return base
+
+
 def load_settings_data() -> dict:
-    data = {}
-    for base in (GLOBAL_AGENTS_DIR, REPO_AGENTS_DIR):
+    """Mặc định trong repo (.agents/ cạnh script) làm nền; ~/.agents/settings.json của người dùng ghi đè lên."""
+    data: dict = {}
+    for base in (REPO_AGENTS_DIR, GLOBAL_AGENTS_DIR):
         candidate = os.path.join(base, "settings.json")
         if os.path.isfile(candidate):
             try:
                 with open(candidate, "r", encoding="utf-8") as f:
-                    data.update(json.load(f))
+                    _deep_merge(data, json.load(f))
             except (OSError, ValueError, json.JSONDecodeError) as e:
                 print(f"[Router] Cảnh báo: không đọc được {candidate} ({e}).")
     return data
@@ -1460,6 +1471,29 @@ async def dispatch(
     print("-" * 50 + banner_end)
 
 
+def print_router_status(enabled_agents: dict[str, bool], supervisor_enabled: bool,
+                        supervisor_model: str, supervisor_profile: str) -> None:
+    """In trạng thái điều phối ở dạng ngắn gọn, ổn định để agent/người dùng kiểm tra TRƯỚC khi chạy."""
+    planner_on = supervisor_enabled and SUPERVISOR_CONFIG["ai_planner"]
+    _, ready = resolve_planner_profile(supervisor_model, supervisor_profile) if planner_on else (None, False)
+    if planner_on and ready:
+        mode = "AI_PLANNER"
+    elif planner_on:
+        mode = "KEYWORD_FALLBACK (profile supervisor chưa đăng nhập)"
+    else:
+        mode = "KEYWORD"
+    on = [k for k in SUPPORTED_AGENTS if enabled_agents.get(k, False)]
+    off = [k for k in SUPPORTED_AGENTS if not enabled_agents.get(k, False)]
+    print(f"SUPERVISOR={'ON' if supervisor_enabled else 'OFF'} model={supervisor_model} profile={supervisor_profile} ready={'yes' if ready else 'no'}")
+    print(f"SPLIT_MODE={mode}")
+    print(f"AGENTS_ON={','.join(on) or '-'} AGENTS_OFF={','.join(off) or '-'}")
+    print(f"ANTIGRAVITY_POOL={','.join(load_antigravity_profiles())}")
+    print(f"SETTINGS={GLOBAL_AGENTS_DIR}/settings.json (ghi đè) trên {REPO_AGENTS_DIR}/settings.json (mặc định)")
+    if mode != "AI_PLANNER":
+        print("LƯU Ý: Supervisor chưa dùng được -> task bị chia bằng keyword cứng, dễ chia sai. "
+              f"Bật bằng: python3 profile_manager.py login {supervisor_model} {supervisor_profile}")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         description="AI Task Router: Phân loại & điều phối task cho Antigravity / Codex / Claude Code."
@@ -1515,6 +1549,10 @@ def main() -> None:
     parser.add_argument(
         "--supervisor-profile", default=None,
         help="Tên profile độc lập của Supervisor (mặc định: supervisor)",
+    )
+    parser.add_argument(
+        "--status", action="store_true",
+        help="In trạng thái Supervisor / chế độ chia task / agent bật-tắt rồi thoát (không gọi AI).",
     )
     parser.add_argument(
         "--no-ai-planner", action="store_true",
@@ -1596,6 +1634,10 @@ def main() -> None:
     agy_profiles = None
     if args.agy_profiles:
         agy_profiles = [p.strip() for p in args.agy_profiles.split(",") if p.strip()]
+
+    if args.status:
+        print_router_status(enabled_agents, supervisor_enabled, supervisor_model, supervisor_profile)
+        return
 
     if args.check_quota:
         asyncio.run(print_quota_status(os.getcwd(), enabled_agents, chains, agy_profiles=agy_profiles))

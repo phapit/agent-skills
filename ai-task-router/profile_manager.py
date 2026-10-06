@@ -231,11 +231,7 @@ REPO_AGENTS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".age
 
 
 def resolve_settings_path() -> str:
-    """Cùng thứ tự với router: ~/.agents/settings.json, rồi .agents/ cạnh script; chưa có thì tạo ở global."""
-    for base in (GLOBAL_AGENTS_DIR, REPO_AGENTS_DIR):
-        candidate = os.path.join(base, "settings.json")
-        if os.path.isfile(candidate):
-            return candidate
+    """Luôn ghi vào ~/.agents/settings.json của người dùng (router để file này ghi đè lên mặc định trong repo)."""
     return os.path.join(GLOBAL_AGENTS_DIR, "settings.json")
 
 

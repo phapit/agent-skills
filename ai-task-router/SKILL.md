@@ -62,6 +62,20 @@ Script sẽ tự động tạo symlink vào các vị trí chuẩn:
 
 Khi bạn (Claude, Antigravity, hoặc Codex) nhận được yêu cầu điều phối đa agent từ người dùng:
 
+### 0. [BẮT BUỘC] Quy trình khi nhận yêu cầu điều phối
+
+Làm đúng thứ tự, không bỏ bước. Lý do: chia task bằng keyword cứng rất dễ cắt sai câu; chỉ Supervisor (Model AI) mới chia đúng, nên phải biết nó có đang bật hay không trước khi chạy.
+
+1. **Kiểm tra trạng thái trước (không tốn quota):**
+   ```bash
+   python3 <path_to_skill>/classify_and_split_task.py --status
+   ```
+   Đọc 2 dòng chính: `SUPERVISOR=ON|OFF ... ready=yes|no` và `SPLIT_MODE=AI_PLANNER|KEYWORD|KEYWORD_FALLBACK`. Dòng `AGENTS_ON`/`AGENTS_OFF` cho biết agent nào đang bật.
+2. **Nếu `SPLIT_MODE=AI_PLANNER`:** chạy router với **nguyên văn** yêu cầu của người dùng. KHÔNG viết lại prompt, KHÔNG tự tách câu, KHÔNG né dấu câu: Supervisor sẽ tự tách và gán agent.
+3. **Nếu `SPLIT_MODE` là `KEYWORD` hoặc `KEYWORD_FALLBACK`:** báo cho người dùng rằng Supervisor chưa dùng được (kèm gợi ý `profile_manager.py login <agent> supervisor`), rồi chạy `--dry-run` để xem kế hoạch chia. Chỉ chạy thật khi kế hoạch hợp lý; nếu chia sai, hỏi người dùng thay vì tự chế prompt để lách bộ tách câu.
+4. **Tôn trọng cấu hình bật/tắt:** không tự thêm `--enable`, `--disable`, `--no-*`, `--supervisor off`, `--no-ai-planner` nếu người dùng không yêu cầu. Agent nào ở `AGENTS_OFF` thì không được chủ động dùng; router tự chuyển task sang agent còn bật.
+5. **Cấu hình ưu tiên:** `~/.agents/settings.json` của người dùng ghi đè mặc định trong repo; chỉnh bật/tắt agent ở file global đó.
+
 ### A. Phân loại và chạy điều phối Task
 Chạy script `classify_and_split_task.py` với đường dẫn tới thư mục chứa skill hiện tại:
 
