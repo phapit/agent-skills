@@ -7,6 +7,7 @@ Cho phép khởi tạo, đăng nhập và chạy session với biến môi trư�
 from __future__ import annotations
 
 import argparse
+import base64
 import glob
 import json
 import os
@@ -58,7 +59,9 @@ def get_profile_env(agent: str, profile_name: str = "supervisor") -> dict[str, s
     if norm_agent == "claude":
         env["CLAUDE_CONFIG_DIR"] = os.path.join(profile_dir, ".claude")
     elif norm_agent == "codex":
-        env["CODEX_HOME"] = os.path.join(profile_dir, ".codex")
+        codex_home = os.path.join(profile_dir, ".codex")
+        os.makedirs(codex_home, exist_ok=True)  # Codex từ chối khởi động nếu CODEX_HOME chưa tồn tại
+        env["CODEX_HOME"] = codex_home
     elif norm_agent == "antigravity":
         env["GEMINI_CLI_HOME"] = os.path.join(profile_dir, ".gemini")
         # Cô lập hoàn toàn D-Bus keyring để không đọc/ghi đè token vào OS keyring chung của máy
@@ -76,12 +79,53 @@ def get_profile_env(agent: str, profile_name: str = "supervisor") -> dict[str, s
     return env
 
 
+def _claude_account_email(profile_dir: str) -> str | None:
+    """Email tài khoản Claude đã đăng nhập: oauthAccount.emailAddress trong .claude/.claude.json (hoặc .claude.json)."""
+    for rel in (os.path.join(".claude", ".claude.json"), ".claude.json"):
+        path = os.path.join(profile_dir, rel)
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                account = json.load(f).get("oauthAccount")
+        except (OSError, ValueError, AttributeError):
+            continue
+        if isinstance(account, dict) and account.get("emailAddress"):
+            return str(account["emailAddress"])
+    return None
+
+
+def _read_codex_auth(profile_dir: str) -> dict:
+    try:
+        with open(os.path.join(profile_dir, ".codex", "auth.json"), "r", encoding="utf-8") as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def _codex_account_email(profile_dir: str) -> str | None:
+    """Email tài khoản Codex: claim `email` trong id_token (JWT) của .codex/auth.json. Chỉ đọc để hiển thị, không in token."""
+    id_token = (_read_codex_auth(profile_dir).get("tokens") or {}).get("id_token")
+    if not isinstance(id_token, str) or id_token.count(".") != 2:
+        return None
+    payload = id_token.split(".")[1]
+    try:
+        claims = json.loads(base64.urlsafe_b64decode(payload + "=" * (-len(payload) % 4)))
+    except (ValueError, TypeError):
+        return None
+    email = claims.get("email") if isinstance(claims, dict) else None
+    return str(email) if email else None
+
+
 def get_profile_email(agent: str, profile_name: str = "supervisor") -> str | None:
     """
     Trích xuất địa chỉ email đã xác thực gần nhất trong profile.
     """
     norm_agent = normalize_agent_name(agent)
     profile_dir = get_profile_dir(norm_agent, profile_name)
+    if norm_agent == "claude":
+        return _claude_account_email(profile_dir)
+    if norm_agent == "codex":
+        return _codex_account_email(profile_dir)
     if norm_agent == "antigravity":
         log_dir = os.path.join(profile_dir, ".gemini", "antigravity-cli", "log")
         if not os.path.isdir(log_dir):
@@ -112,11 +156,11 @@ def is_profile_initialized(agent: str, profile_name: str = "supervisor") -> bool
         email = get_profile_email(norm_agent, profile_name)
         return bool(email) and os.path.isdir(os.path.join(profile_dir, ".gemini"))
     elif norm_agent == "claude":
-        return os.path.isdir(os.path.join(profile_dir, ".claude")) or os.path.isfile(
-            os.path.join(profile_dir, ".claude.json")
-        )
+        return bool(get_profile_email(norm_agent, profile_name))
     elif norm_agent == "codex":
-        return os.path.isdir(os.path.join(profile_dir, ".codex"))
+        auth = _read_codex_auth(profile_dir)
+        tokens = auth.get("tokens") or {}
+        return bool(tokens.get("refresh_token") or tokens.get("access_token") or auth.get("OPENAI_API_KEY"))
     return False
 
 
@@ -385,7 +429,7 @@ def list_profiles_status() -> None:
         print("=" * 65 + "\n")
         return
 
-    email_map: dict[str, list[str]] = {}
+    email_map: dict[tuple[str, str], list[str]] = {}
 
     for p in profiles:
         full_path = os.path.join(DEFAULT_PROFILES_BASE, p)
@@ -399,13 +443,13 @@ def list_profiles_status() -> None:
         email = get_profile_email(agent, p_name)
         email_str = f" [Tài khoản: {email}]" if email else " [Chưa xác thực tài khoản]"
         if email:
-            email_map.setdefault(email, []).append(p)
+            email_map.setdefault((agent, email), []).append(p)
         print(f"  • {p:<28} [{status}]{email_str}")
         print(f"    Thư mục: {full_path}")
 
     # Cảnh báo nếu các profile bị trùng tài khoản
     has_duplicate = False
-    for email, profs in email_map.items():
+    for (_agent, email), profs in email_map.items():
         if len(profs) > 1:
             if not has_duplicate:
                 print("\n  " + "-" * 61)
