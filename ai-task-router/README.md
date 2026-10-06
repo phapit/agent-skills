@@ -271,6 +271,10 @@ Trước khi chuyển sang worker mới, Router đảm bảo **ngữ cảnh khô
 
 ---
 
+## Bảo mật & khuyến nghị sử dụng
+
+Router chạy worker Antigravity trong `bwrap`, quét nghi vấn prompt injection trước khi chạy và có bộ test `tests/`. Tuy vậy chưa thể coi là an toàn tuyệt đối: **hãy đọc kỹ prompt và file chỉ dẫn của dự án trước khi giao việc cho Agent.** Kết quả kiểm thử, giới hạn và khuyến nghị đầy đủ: xem mục "Bảo mật & Kết quả kiểm thử" ở [README gốc](../README.md) và [docs/SECURITY_MODEL.md](../docs/SECURITY_MODEL.md).
+
 ## Tuyên bố miễn trừ trách nhiệm (Disclaimer)
 
 - Dự án này là công cụ điều phối mã nguồn mở độc lập, không phải là sản phẩm chính thức và không có liên kết, tài trợ hay bảo trợ bởi Anthropic, Google, hoặc OpenAI.
