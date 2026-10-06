@@ -111,11 +111,14 @@ def scan_text(source: str, text: str) -> list[dict]:
 def scan_workspace(cwd: str, user_prompt: str) -> list[dict]:
     findings = scan_text("yêu cầu người dùng", user_prompt)
     seen: set[str] = set()
+    root = os.path.realpath(cwd)
     for pattern in SCAN_FILE_GLOBS:
         for path in glob.glob(os.path.join(cwd, pattern)):
             real = os.path.realpath(path)
             if real in seen or not os.path.isfile(real):
                 continue
+            if os.path.commonpath([root, real]) != root:
+                continue  # symlink trỏ ra ngoài workspace: không đọc
             seen.add(real)
             try:
                 if os.path.getsize(real) > MAX_FILE_BYTES:

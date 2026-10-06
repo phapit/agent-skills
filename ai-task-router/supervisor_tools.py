@@ -148,7 +148,7 @@ def detect_test_command(cwd: str = ".") -> str | None:
     return None
 
 
-def run_verification_tests(test_command: str = "auto", cwd: str = ".") -> dict:
+def run_verification_tests(test_command: str = "auto", cwd: str = ".", trust_repo_scripts: bool = False) -> dict:
     """
     Chạy bộ test kiểm thử độc lập do Supervisor kích hoạt.
     Worker báo xong không có nghĩa là code chạy đúng -> Supervisor bắt buộc phải test lại.
@@ -161,6 +161,13 @@ def run_verification_tests(test_command: str = "auto", cwd: str = ".") -> dict:
             return {
                 "status": "SKIPPED",
                 "message": "Không nhận diện được test suite tự động (không có tests/, package.json, go.mod...)",
+                "passed": True,
+            }
+        if detected == "npm test" and not trust_repo_scripts:
+            return {
+                "status": "SKIPPED",
+                "message": "Bỏ qua 'npm test' tự phát hiện: script trong package.json do repo định nghĩa (không tin cậy). "
+                           "Đặt supervisor.test_command rõ ràng hoặc supervisor.trust_repo_scripts=true để chạy.",
                 "passed": True,
             }
         cmd_to_run = detected
@@ -251,6 +258,7 @@ def main() -> None:
 
     # run-tests
     test_p = subparsers.add_parser("run-tests", help="Chạy kiểm thử độc lập")
+    test_p.add_argument("--trust-repo-scripts", action="store_true", help="Cho phép chạy npm test tự phát hiện (script do repo định nghĩa)")
     test_p.add_argument("cmd", nargs="?", default="auto", help="Lệnh test (mặc định: auto)")
 
     # reports
@@ -270,7 +278,7 @@ def main() -> None:
         diff = inspect_git_diff()
         print(json.dumps(diff, indent=2, ensure_ascii=False))
     elif args.action == "run-tests":
-        res = run_verification_tests(args.cmd)
+        res = run_verification_tests(args.cmd, trust_repo_scripts=args.trust_repo_scripts)
         print(json.dumps(res, indent=2, ensure_ascii=False))
     elif args.action == "reports":
         reps = read_handoff_reports()

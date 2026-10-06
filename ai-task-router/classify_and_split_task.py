@@ -164,6 +164,7 @@ def load_supervisor_config() -> dict:
         "profile": str(raw.get("profile", "supervisor")),
         "enable_quality_gate": bool(raw.get("enable_quality_gate", True)),
         "test_command": str(raw.get("test_command", "auto")),
+        "trust_repo_scripts": bool(raw.get("trust_repo_scripts", False)),
         "ai_planner": bool(raw.get("ai_planner", True)),
         "planner_timeout_sec": int(raw.get("planner_timeout_sec", 120)),
     }
@@ -200,8 +201,24 @@ def agy_permission_args() -> list[str]:
     return ["--dangerously-skip-permissions"]
 
 
+# Đường dẫn trong workspace bị khóa chỉ-đọc: nơi kẻ tấn công cài "persistence" để mã chạy ngoài sandbox
+# khi người dùng thao tác git/IDE sau đó (hooks, config git, tác vụ IDE, direnv...).
+_BWRAP_WORKSPACE_RO = (".git/hooks", ".git/config", ".vscode", ".idea", ".husky", ".envrc")
+# File cấu hình của chính agy: chặn agent tự nới permissions.allow cho các lần chạy sau.
+_BWRAP_AGY_CONFIG_RO = (".gemini/settings.json", ".gemini/antigravity-cli/settings.json")
+# Socket Unix cho phép "thoát" sandbox dù hệ thống ro-bind (connect() không bị chặn bởi ro).
+_BWRAP_SOCKETS_MASK_FILES = ("/run/docker.sock", "/var/run/docker.sock", "/run/containerd/containerd.sock")
+
+
 def confine_agy_cmd(cmd_args: list[str], cwd: str | None, env: dict | None) -> list[str]:
-    """Bọc lệnh agy bằng bwrap: ro-bind toàn hệ thống, chỉ workspace + HOME của profile được ghi."""
+    """
+    Bọc lệnh agy bằng bwrap. Lớp thực thi thật (OS-level) cho F5:
+    - Toàn hệ thống ro-bind; chỉ workspace + HOME của profile ghi được.
+    - Che thư mục bí mật, token của các profile khác, /run/user/UID (D-Bus/keyring/ssh-agent), docker.sock.
+    - Khóa chỉ-đọc các điểm persistence trong workspace (.git/hooks, .git/config, .vscode...) và settings của agy.
+    - Bỏ biến môi trường trỏ tới socket (SSH_AUTH_SOCK, DBUS_SESSION_BUS_ADDRESS...).
+    Rủi ro còn lại (đã ghi trong tài liệu): mạng không bị cô lập (agy cần gọi API), socket abstract.
+    """
     if agy_permission_mode() != "bwrap":
         return cmd_args
     workspace = os.path.abspath(cwd or os.getcwd())
@@ -215,6 +232,15 @@ def confine_agy_cmd(cmd_args: list[str], cwd: str | None, env: dict | None) -> l
             bw += ["--tmpfs", d]
     if os.path.isdir(DEFAULT_PROFILES_BASE):
         bw += ["--tmpfs", DEFAULT_PROFILES_BASE]
+    run_user = f"/run/user/{os.getuid()}"
+    if os.path.isdir(run_user):
+        bw += ["--tmpfs", run_user]
+    masked_socks: set[str] = set()
+    for sock in _BWRAP_SOCKETS_MASK_FILES:
+        real = os.path.realpath(sock)  # /var/run -> /run: tránh bind trùng đích qua symlink (bwrap lỗi)
+        if os.path.exists(real) and real not in masked_socks:
+            masked_socks.add(real)
+            bw += ["--ro-bind", "/dev/null", real]
     writable = [workspace]
     if agy_home != real_home:
         os.makedirs(agy_home, exist_ok=True)
@@ -225,6 +251,17 @@ def confine_agy_cmd(cmd_args: list[str], cwd: str | None, env: dict | None) -> l
         writable.append(gem)
     for w in dict.fromkeys(writable):
         bw += ["--bind", w, w]
+    # Khóa chỉ-đọc SAU các bind ghi được (bind sau đè bind trước)
+    for rel in _BWRAP_WORKSPACE_RO:
+        t = os.path.join(workspace, rel)
+        if os.path.exists(t):
+            bw += ["--ro-bind", t, t]
+    for rel in _BWRAP_AGY_CONFIG_RO:
+        t = os.path.join(agy_home, rel)
+        if os.path.isfile(t):
+            bw += ["--ro-bind", t, t]
+    for var in ("SSH_AUTH_SOCK", "DBUS_SESSION_BUS_ADDRESS", "GPG_AGENT_INFO", "XDG_RUNTIME_DIR"):
+        bw += ["--unsetenv", var]
     bw += ["--die-with-parent", "--chdir", workspace, "--"]
     return bw + cmd_args
 
@@ -264,12 +301,21 @@ def validate_profile_name(profile_name: str) -> str:
 
 
 def ensure_private_dir(path: str) -> None:
-    """Tạo thư mục với quyền 0700 (chỉ chủ sở hữu); siết quyền cả thư mục đã tồn tại."""
+    """Tạo thư mục với quyền 0700 (chỉ chủ sở hữu); siết quyền cả thư mục đã tồn tại. Từ chối symlink."""
+    if os.path.islink(path):
+        raise ValueError(f"Từ chối thao tác trên symlink: {path!r}")
     os.makedirs(path, mode=0o700, exist_ok=True)
     try:
-        os.chmod(path, 0o700)
+        # O_NOFOLLOW + fchmod: không để chmod theo symlink bị tráo đổi sau bước kiểm tra
+        fd = os.open(path, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    except OSError as e:
+        raise ValueError(f"Không mở được thư mục riêng tư an toàn: {path!r} ({e})") from e
+    try:
+        os.fchmod(fd, 0o700)
     except OSError:
         pass
+    finally:
+        os.close(fd)
 
 
 def get_agy_profile_env(profile_name: str) -> dict[str, str] | None:
@@ -659,7 +705,7 @@ def parse_planner_output(
     for m in re.finditer(r"\{", output):
         try:
             obj, _ = decoder.raw_decode(output[m.start():])
-        except ValueError:
+        except (ValueError, RecursionError):
             continue
         if isinstance(obj, dict) and isinstance(obj.get("subtasks"), list):
             plan = obj["subtasks"]  # lấy kế hoạch CUỐI: tránh JSON giả bị model lặp lại từ yêu cầu gốc
@@ -688,7 +734,7 @@ def parse_planner_security(output: str) -> list[dict]:
     for m in re.finditer(r"\{", output):
         try:
             obj, _ = decoder.raw_decode(output[m.start():])
-        except ValueError:
+        except (ValueError, RecursionError):
             continue
         if isinstance(obj, dict) and isinstance(obj.get("subtasks"), list):
             found = obj.get("security_findings")
@@ -1863,7 +1909,7 @@ def main() -> None:
             else:
                 print("[Quality Gate] Không phát hiện thay đổi mã nguồn mới.")
 
-            test_result = run_verification_tests(test_cmd, cwd=os.getcwd())
+            test_result = run_verification_tests(test_cmd, cwd=os.getcwd(), trust_repo_scripts=bool(SUPERVISOR_CONFIG.get("trust_repo_scripts", False)))
             if test_result.get("status") == "SKIPPED":
                 print(f"[Quality Gate] Kiểm thử: {test_result.get('message')}")
             elif test_result.get("passed"):

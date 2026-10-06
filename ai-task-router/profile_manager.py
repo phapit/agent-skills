@@ -50,12 +50,21 @@ def validate_profile_name(profile_name: str) -> str:
 
 
 def ensure_private_dir(path: str) -> None:
-    """Tạo thư mục với quyền 0700 (chỉ chủ sở hữu); siết quyền cả thư mục đã tồn tại."""
+    """Tạo thư mục với quyền 0700 (chỉ chủ sở hữu); siết quyền cả thư mục đã tồn tại. Từ chối symlink."""
+    if os.path.islink(path):
+        raise ValueError(f"Từ chối thao tác trên symlink: {path!r}")
     os.makedirs(path, mode=0o700, exist_ok=True)
     try:
-        os.chmod(path, 0o700)
+        # O_NOFOLLOW + fchmod: không để chmod theo symlink bị tráo đổi sau bước kiểm tra
+        fd = os.open(path, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    except OSError as e:
+        raise ValueError(f"Không mở được thư mục riêng tư an toàn: {path!r} ({e})") from e
+    try:
+        os.fchmod(fd, 0o700)
     except OSError:
         pass
+    finally:
+        os.close(fd)
 
 
 def get_profile_dir(agent: str, profile_name: str = "supervisor") -> str:
