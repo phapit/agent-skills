@@ -1039,8 +1039,16 @@ async def check_agy_quota(env: dict | None = None, profile_name: str | None = No
 
 
 async def check_claude_quota() -> dict | None:
-    _, output = await run_capture([CLAUDE_CMD, "-p", "/usage"])
-    return parse_claude_quota(output)
+    code, output = await run_capture([CLAUDE_CMD, "-p", "/usage"])
+    quota = parse_claude_quota(output)
+    if quota is not None:
+        return quota
+    if code == 0:
+        # CLI hoạt động bình thường, nhưng bản CLI hiện tại không còn in %
+        # quota trong chế độ --print (xem CHANGELOG). Báo "sẵn sàng" thay vì
+        # nhầm thành "chưa sẵn sàng".
+        return {"used_percent": None, "resets": None}
+    return None
 
 
 async def check_codex_status() -> dict | None:
@@ -1113,8 +1121,10 @@ async def print_quota_status(
     print("[2] Claude Code (Current session):")
     if not enabled_agents.get("claude", True):
         print("    [TẮT] Đang bị tắt theo cấu hình.")
-    elif claude_quota:
+    elif claude_quota and claude_quota.get("used_percent") is not None:
         print(f"    Đã dùng {claude_quota['used_percent']}% - reset lúc {claude_quota['resets']}")
+    elif claude_quota:
+        print("    Sẵn sàng (Ready) - CLI không trả về % quota ở chế độ --print.")
     else:
         print("    Không đọc được / CLI 'claude' chưa sẵn sàng.")
         print("    -> Cài đặt nhanh: curl -fsSL https://claude.ai/install.sh | bash")
